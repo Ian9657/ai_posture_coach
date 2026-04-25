@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>POSTURE CORE v2.5.2</title>
+    <title>POSTURE CORE v2.6.0</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -181,9 +181,46 @@
         @media (max-width: 600px) {
             #sidebar { grid-template-columns: 1fr; }
         }
+
+        /* Toast Notification */
+        #toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; }
+        .toast { 
+            background: var(--panel); 
+            border: 1px solid rgba(255,255,255,0.1); 
+            color: var(--text-bright); 
+            padding: 12px 20px; 
+            border-radius: 8px; 
+            font-size: 0.85rem; 
+            backdrop-filter: blur(10px); 
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+            animation: toast-in 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28); 
+            border-left: 4px solid var(--accent); 
+        }
+        @keyframes toast-in { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* Loading Overlay */
+        #loading-overlay { 
+            position: fixed; inset: 0; background: var(--bg); 
+            display: flex; flex-direction: column; align-items: center; justify-content: center; 
+            z-index: 2000; transition: opacity 0.5s ease; 
+        }
+        #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+        .loader { 
+            width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.05); 
+            border-radius: 50%; border-top-color: var(--accent); 
+            animation: spin 1s linear infinite; margin-bottom: 20px; 
+        }
+        .loading-text { font-size: 0.8rem; font-weight: 600; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
+    <div id="loading-overlay">
+        <div class="loader"></div>
+        <div class="loading-text">Initializing AI Models...</div>
+    </div>
+    <div id="toast-container"></div>
     <div id="visual-stream">
         <div class="container">
             <video id="input_video"></video>
@@ -191,7 +228,7 @@
         </div>
     </div>
     <div id="sidebar">
-        <h1>POSTURE_CORE_v2.5.2</h1>
+        <h1>POSTURE_CORE_v2.6.0</h1>
         
         <div class="metric" id="m-shoulder">
             <div class="label">Shoulders</div>
@@ -235,7 +272,7 @@
         </div>
 
         <div style="display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap;">
-            <button class="btn" style="flex: 2; min-width: 120px;" onclick="calibrate()">Calibration (C)</button>
+            <button class="btn" id="calibrate-btn" style="flex: 2; min-width: 120px;" onclick="calibrate()">Calibration (C)</button>
             <button class="btn" id="zen-btn" style="flex: 1; min-width: 90px; padding: 14px 0;" onclick="toggleZen()">Zen Mode</button>
         </div>
         <button class="btn" id="pip-btn" style="width: 100%;" onclick="togglePiP()">PIP</button>
@@ -246,6 +283,21 @@
         </div>
     </div>
     <script>
+        const CONFIG = {
+            VIS_THRESH: 0.85,
+            EMA_ALPHA: 0.15,
+            SHOULDER_ALPHA: 0.10,
+            THRESHOLDS: {
+                shoulder: 4.5,
+                rotation: 0.20,
+                forward: 1.15,
+                mouth: 1.12
+            },
+            RAMP_SEC: 30,
+            MAX_HISTORY_SEC: 30 * 60,
+            CALIBRATION_FRAMES: 90
+        };
+
         const videoElement = document.getElementById('input_video');
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
@@ -265,9 +317,23 @@
         let isZenMode = false;
         
         const domCache = {};
-        let cachedBgGrad = null;
-        let cachedGridGrad = null;
-        let cachedGridPath = null;
+        const canvasCache = {
+            width: 0, height: 0,
+            bgGrad: null, gridGrad: null, gridPath: null
+        };
+
+        function showToast(msg, duration = 3000) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerText = msg;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(120%)';
+                setTimeout(() => toast.remove(), 300);
+            }, duration);
+        }
 
         function toggleZen() {
             isZenMode = !isZenMode;
@@ -281,11 +347,11 @@
         let pipVideo = null;
         async function togglePiP() {
             if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                alert('悬浮窗功能仅支持 PC 端网页使用。');
+                showToast('PiP only supported on PC.');
                 return;
             }
             if (!document.pictureInPictureEnabled) {
-                alert('你的浏览器不支持悬浮窗功能。');
+                showToast('Browser does not support PiP.');
                 return;
             }
 
@@ -297,7 +363,6 @@
                     pipVideo.muted = true;
                     pipVideo.autoplay = true;
                     pipVideo.playsInline = true;
-                    // Append hidden video to dom to satisfy some browsers
                     pipVideo.style.position = 'fixed';
                     pipVideo.style.opacity = '0';
                     pipVideo.style.pointerEvents = 'none';
@@ -326,8 +391,7 @@
                     await pipVideo.play();
                     await pipVideo.requestPictureInPicture();
                 } catch (error) {
-                    console.error(error);
-                    alert('开启悬浮窗失败: ' + error.message);
+                    showToast('PiP failed: ' + error.message);
                 }
             }
         }
@@ -342,7 +406,6 @@
 
         // History stores raw values for segment analysis
         const scoreHistory = [];
-        const MAX_HISTORY_SEC = 30 * 60;
         let chartWindowMin = 0;
         let currentScore = 100;
         let lastSampleTime = 0;
@@ -368,384 +431,305 @@
         }
 
         function computeScore() {
-            // Update consecutive counters
+            // Update penalty counters
             for (const key of ['shoulder', 'rotation', 'forward', 'mouth']) {
                 if (alertStates[key]) {
-                    consecutiveAlert[key] = Math.min(RAMP_SEC, consecutiveAlert[key] + 1);
+                    consecutiveAlert[key] = Math.min(CONFIG.RAMP_SEC, consecutiveAlert[key] + 1);
                 } else {
-                    // Slow recovery: takes 2s to recover 1s of penalty
+                    // 2s recovery for 1s penalty
                     consecutiveAlert[key] = Math.max(0, consecutiveAlert[key] - 0.5); 
                 }
             }
             // Cumulative penalty with acceleration
             let totalPenalty = 0;
             for (const key of ['shoulder', 'rotation', 'forward', 'mouth']) {
-                const accel = consecutiveAlert[key] / RAMP_SEC;
+                const accel = consecutiveAlert[key] / CONFIG.RAMP_SEC;
                 totalPenalty += WEIGHTS[key] * accel;
             }
             return Math.round(100 * (1 - totalPenalty));
         }
 
-        function onResults(results) {
+        // --- onResults Helpers ---
+        function setupCanvas(results) {
             if (canvasElement.width !== results.image.width || canvasElement.height !== results.image.height) {
                 canvasElement.width = results.image.width;
                 canvasElement.height = results.image.height;
+                // Invalidate cache on resize
+                canvasCache.bgGrad = null;
+                canvasCache.width = canvasElement.width;
+                canvasCache.height = canvasElement.height;
             }
-            canvasCtx.save();
             const W = canvasElement.width, H = canvasElement.height;
+            canvasCtx.save();
             canvasCtx.clearRect(0, 0, W, H);
             canvasCtx.translate(W, 0);
             canvasCtx.scale(-1, 1);
-            
-            if (isZenMode) {
-                if (!cachedBgGrad) {
-                    cachedBgGrad = canvasCtx.createRadialGradient(W/2, H/2, 0, W/2, H/2, W);
-                    cachedBgGrad.addColorStop(0, '#18181b');
-                    cachedBgGrad.addColorStop(1, '#050505');
+            return { W, H };
+        }
 
-                    cachedGridGrad = canvasCtx.createRadialGradient(W/2, H/2, 0, W/2, H/2, W/1.5);
-                    cachedGridGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
-                    cachedGridGrad.addColorStop(1, 'rgba(255,255,255,0)');
-
-                    cachedGridPath = new Path2D();
-                    for(let i=0; i<W; i+=40) { cachedGridPath.moveTo(i,0); cachedGridPath.lineTo(i,H); }
-                    for(let i=0; i<H; i+=40) { cachedGridPath.moveTo(0,i); cachedGridPath.lineTo(W,i); }
-                }
-
-                // 1. Deep radial background
-                canvasCtx.fillStyle = cachedBgGrad;
-                canvasCtx.fillRect(0, 0, W, H);
-                
-                // 2. Center-fading grid
-                canvasCtx.strokeStyle = cachedGridGrad;
-                canvasCtx.lineWidth = 1;
-                canvasCtx.stroke(cachedGridPath);
-                
-                // 3. Dynamic Aura tracking the user
-                if (results.poseLandmarks) {
-                    const nose = results.poseLandmarks[0];
-                    const aura = canvasCtx.createRadialGradient(nose.x*W, nose.y*H, 0, nose.x*W, nose.y*H, 400);
-                    const hasAlert = alertStates.shoulder || alertStates.rotation || alertStates.forward || alertStates.mouth;
-                    const auraColor = hasAlert ? 'rgba(249, 115, 22, 0.08)' : 'rgba(34, 197, 94, 0.08)';
-                    aura.addColorStop(0, auraColor);
-                    aura.addColorStop(1, 'rgba(0,0,0,0)');
-                    canvasCtx.fillStyle = aura;
-                    canvasCtx.fillRect(0, 0, W, H);
-                }
-            } else {
+        function handleZenMode(results, W, H) {
+            if (!isZenMode) {
                 canvasCtx.drawImage(results.image, 0, 0, W, H);
+                return;
             }
             
-            let poseMouthUnoccluded = false;
+            if (!canvasCache.bgGrad) {
+                canvasCache.bgGrad = canvasCtx.createRadialGradient(W/2, H/2, 0, W/2, H/2, W);
+                canvasCache.bgGrad.addColorStop(0, '#18181b');
+                canvasCache.bgGrad.addColorStop(1, '#050505');
+
+                canvasCache.gridGrad = canvasCtx.createRadialGradient(W/2, H/2, 0, W/2, H/2, W/1.5);
+                canvasCache.gridGrad.addColorStop(0, 'rgba(255,255,255,0.04)');
+                canvasCache.gridGrad.addColorStop(1, 'rgba(255,255,255,0)');
+
+                canvasCache.gridPath = new Path2D();
+                for(let i=0; i<W; i+=40) { canvasCache.gridPath.moveTo(i,0); canvasCache.gridPath.lineTo(i,H); }
+                for(let i=0; i<H; i+=40) { canvasCache.gridPath.moveTo(0,i); canvasCache.gridPath.lineTo(W,i); }
+            }
+
+            canvasCtx.fillStyle = canvasCache.bgGrad;
+            canvasCtx.fillRect(0, 0, W, H);
+            canvasCtx.strokeStyle = canvasCache.gridGrad;
+            canvasCtx.lineWidth = 1;
+            canvasCtx.stroke(canvasCache.gridPath);
             
             if (results.poseLandmarks) {
-                const lm = results.poseLandmarks;
-                const nose = lm[0], leftEar = lm[7], rightEar = lm[8], leftS = lm[11], rightS = lm[12];
-                const mouthL = lm[9], mouthR = lm[10];
+                const nose = results.poseLandmarks[0];
+                const aura = canvasCtx.createRadialGradient(nose.x*W, nose.y*H, 0, nose.x*W, nose.y*H, 400);
+                const hasAlert = alertStates.shoulder || alertStates.rotation || alertStates.forward || alertStates.mouth;
+                const auraColor = hasAlert ? 'rgba(249, 115, 22, 0.08)' : 'rgba(34, 197, 94, 0.08)';
+                aura.addColorStop(0, auraColor);
+                aura.addColorStop(1, 'rgba(0,0,0,0)');
+                canvasCtx.fillStyle = aura;
+                canvasCtx.fillRect(0, 0, W, H);
+            }
+        }
+
+        function processPosture(results, W, H) {
+            if (!results.poseLandmarks) return { mouthVisible: false };
+            const lm = results.poseLandmarks;
+            const nose = lm[0], leftEar = lm[7], rightEar = lm[8], leftS = lm[11], rightS = lm[12];
+            const mouthL = lm[9], mouthR = lm[10];
+            
+            // visibility threshold filters hallucinations
+            const shoulderVisible = leftS.visibility > CONFIG.VIS_THRESH && rightS.visibility > CONFIG.VIS_THRESH;
+            const faceVisible = !!results.faceLandmarks && nose.visibility > CONFIG.VIS_THRESH && leftEar.visibility > CONFIG.VIS_THRESH && rightEar.visibility > CONFIG.VIS_THRESH;
+            const poseMouthUnoccluded = mouthL.visibility > CONFIG.VIS_THRESH && mouthR.visibility > CONFIG.VIS_THRESH;
+            
+            if (shoulderVisible) {
+                const dy = (leftS.y - rightS.y) * H;
+                const dx = (leftS.x - rightS.x) * W;
+                const rawAngle = Math.atan2(dy, dx) * (180 / Math.PI);
+                if (isCalibrating && calibrationFrames < CONFIG.CALIBRATION_FRAMES) calibrationData.shoulderAngle.push(rawAngle);
                 
-                // Raise visibility threshold to 0.85 to reject MediaPipe "hallucinations"
-                const VIS_THRESH = 0.85;
-                const shoulderVisible = leftS.visibility > VIS_THRESH && rightS.visibility > VIS_THRESH;
-                // Require the dense face mesh to be actively tracking to trust the face landmarks
-                const faceVisible = !!results.faceLandmarks && nose.visibility > VIS_THRESH && leftEar.visibility > VIS_THRESH && rightEar.visibility > VIS_THRESH;
-                poseMouthUnoccluded = mouthL.visibility > VIS_THRESH && mouthR.visibility > VIS_THRESH;
-                
-                if (shoulderVisible) {
-                    // Use 2D landmarks with aspect ratio correction for accurate angle
-                    const dy = (leftS.y - rightS.y) * H;
-                    const dx = (leftS.x - rightS.x) * W;
-                    const rawAngle = Math.atan2(dy, dx) * (180 / Math.PI);
-                    
-                    if (isCalibrating && calibrationFrames < 90) {
-                        calibrationData.shoulderAngle.push(rawAngle);
-                    }
-                    
-                    const corrected = rawAngle - baselineShoulderAngle;
-                    
-                    // Heavier smoothing (alpha=0.10) to filter head-turn crosstalk
-                    const SHOULDER_ALPHA = 0.10;
-                    smoothShoulderAngle = (corrected * SHOULDER_ALPHA) + (smoothShoulderAngle * (1 - SHOULDER_ALPHA));
-                    alertStates.shoulder = Math.abs(smoothShoulderAngle) > 4.5;
-                    const shoulderPct = Math.abs(smoothShoulderAngle) / 8 * 100;
-                    updateMetric('m-shoulder', smoothShoulderAngle.toFixed(2) + "°", alertStates.shoulder, shoulderPct);
-                } else {
-                    alertStates.shoulder = false;
-                    updateMetric('m-shoulder', "BLOCKED", false, 0);
-                }
-                
-                if (faceVisible) {
-                    const distL = Math.abs(nose.x - leftEar.x);
-                    const distR = Math.abs(nose.x - rightEar.x);
-                    let rawRotation = (distL - distR) / (distL + distR);
-                    
-                    if (isCalibrating && calibrationFrames < 90) {
-                        calibrationData.faceRotation.push(rawRotation);
-                    }
-                    
-                    rawRotation -= baselineFaceRotation;
-                    
-                    smoothFaceRotation = (rawRotation * EMA_ALPHA) + (smoothFaceRotation * (1 - EMA_ALPHA));
-                    alertStates.rotation = Math.abs(smoothFaceRotation) > 0.20;
-                    const rotPct = Math.abs(smoothFaceRotation) / 0.4 * 100;
-                    updateMetric('m-rotation', (smoothFaceRotation > 0 ? "R " : "L ") + Math.abs(smoothFaceRotation).toFixed(2), alertStates.rotation, rotPct);
-                } else {
-                    alertStates.rotation = false;
-                    updateMetric('m-rotation', "BLOCKED", false, 0);
-                }
-
-                let fwdExtra = 0;
-                if (faceVisible && shoulderVisible) {
-                    const earDist = Math.hypot(leftEar.x - rightEar.x, leftEar.y - rightEar.y);
-                    const shoulderDist = Math.hypot(leftS.x - rightS.x, leftS.y - rightS.y);
-                    lastHeadRatio = earDist / shoulderDist;
-
-                    if (baselineHeadRatio > 0) {
-                        smoothHeadRatio = (lastHeadRatio * EMA_ALPHA) + (smoothHeadRatio * (1 - EMA_ALPHA));
-                        const forwardRatio = smoothHeadRatio / baselineHeadRatio;
-                        alertStates.forward = forwardRatio > 1.15;
-                        fwdExtra = Math.round((forwardRatio-1)*100);
-                        const fwdPct = Math.max(0, forwardRatio - 1) / 0.30 * 100;
-                        updateMetric('m-forward', forwardRatio > 1.15 ? "+" + fwdExtra + "%" : "NORMAL", alertStates.forward, fwdPct);
-                    } else {
-                        updateMetric('m-forward', "NO CALIB", false, 0);
-                    }
-                } else {
-                    alertStates.forward = false;
-                    updateMetric('m-forward', "BLOCKED", false, 0);
-                }
-
-                // Draw specific visual guides
-                if (shoulderVisible) {
-                    canvasCtx.beginPath();
-                    canvasCtx.moveTo(leftS.x * W, leftS.y * H);
-                    canvasCtx.lineTo(rightS.x * W, rightS.y * H);
-                    canvasCtx.lineWidth = 4;
-                    canvasCtx.strokeStyle = alertStates.shoulder ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
-                    canvasCtx.stroke();
-                }
-
-                let faceCenterX = 0, faceCenterY = 0;
-                if (faceVisible) {
-                    faceCenterX = (leftEar.x + rightEar.x) / 2 * W;
-                    faceCenterY = (leftEar.y + rightEar.y) / 2 * H;
-                    canvasCtx.beginPath();
-                    canvasCtx.moveTo(nose.x * W, nose.y * H);
-                    canvasCtx.lineTo(faceCenterX, faceCenterY);
-                    canvasCtx.lineWidth = 3;
-                    canvasCtx.strokeStyle = alertStates.rotation ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
-                    canvasCtx.stroke();
-                }
-                
-                // HUD Data Labels (Spatial UI)
-                canvasCtx.textAlign = 'center';
-                const drawHUD = (text, x, y, isAlert) => {
-                    canvasCtx.save();
-                    canvasCtx.translate(x, y);
-                    canvasCtx.scale(-1, 1);
-                    canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
-                    canvasCtx.beginPath();
-                    canvasCtx.roundRect(-24, -14, 48, 20, 6);
-                    canvasCtx.fill();
-                    canvasCtx.fillStyle = isAlert ? '#f97316' : '#22c55e';
-                    canvasCtx.font = 'bold 10px JetBrains Mono';
-                    canvasCtx.fillText(text, 0, 0);
-                    canvasCtx.restore();
-                };
-
-                if (shoulderVisible) drawHUD("S:" + Math.abs(smoothShoulderAngle).toFixed(0) + "°", leftS.x * W + 20, leftS.y * H - 15, alertStates.shoulder);
-                if (faceVisible) {
-                    const rotDir = smoothFaceRotation > 0 ? "R:" : "L:";
-                    drawHUD(rotDir + Math.abs(smoothFaceRotation).toFixed(2), faceCenterX, faceCenterY - 30, alertStates.rotation);
-                    if (baselineHeadRatio > 0 && fwdExtra > 0) drawHUD("F:+" + fwdExtra + "%", nose.x * W, nose.y * H + 30, alertStates.forward);
-                }
+                const corrected = rawAngle - baselineShoulderAngle;
+                smoothShoulderAngle = (corrected * CONFIG.SHOULDER_ALPHA) + (smoothShoulderAngle * (1 - CONFIG.SHOULDER_ALPHA));
+                alertStates.shoulder = Math.abs(smoothShoulderAngle) > CONFIG.THRESHOLDS.shoulder;
+                updateMetric('m-shoulder', smoothShoulderAngle.toFixed(2) + "°", alertStates.shoulder, Math.abs(smoothShoulderAngle) / 8 * 100);
+            } else {
+                alertStates.shoulder = false;
+                updateMetric('m-shoulder', "BLOCKED", false, 0);
             }
             
-            if (results.faceLandmarks) {
-                const face = results.faceLandmarks;
-                const upperLip = face[13], lowerLip = face[14];
-                const forehead = face[10], chin = face[152];
+            if (faceVisible) {
+                const distL = Math.abs(nose.x - leftEar.x);
+                const distR = Math.abs(nose.x - rightEar.x);
+                let rawRotation = (distL - distR) / (distL + distR);
+                if (isCalibrating && calibrationFrames < CONFIG.CALIBRATION_FRAMES) calibrationData.faceRotation.push(rawRotation);
                 
-                const lipSep = Math.abs(lowerLip.y - upperLip.y);
-                const faceHeight = Math.abs(chin.y - forehead.y);
-                lastLipDist = lipSep / faceHeight;
-                
-                const isMouthInFrame = upperLip.x >= 0 && upperLip.x <= 1 && upperLip.y >= 0 && upperLip.y <= 1 &&
-                                       lowerLip.x >= 0 && lowerLip.x <= 1 && lowerLip.y >= 0 && lowerLip.y <= 1;
-                
-                const isMouthVisible = isMouthInFrame && poseMouthUnoccluded;
-                
-                if (baselineLipDist > 0 && isMouthVisible) {
-                    const ratio = lastLipDist / baselineLipDist;
-                    let lastState = mouthStateHistory.length > 0 ? mouthStateHistory[mouthStateHistory.length - 1] : false;
-                    let currentRawState = lastState;
-                    // 增加迟滞（Hysteresis），防止在临界点微小抖动被判定为快速开合（说话）
-                    if (lastState && ratio < 1.06) currentRawState = false;
-                    else if (!lastState && ratio > 1.14) currentRawState = true;
-                    
-                    mouthStateHistory.push(currentRawState);
-                    if (mouthStateHistory.length > 30) mouthStateHistory.shift();
-                    
-                    let transitions = 0;
-                    for (let i = 1; i < mouthStateHistory.length; i++) {
-                        if (mouthStateHistory[i] !== mouthStateHistory[i-1]) transitions++;
-                    }
-                    
-                    const isTalking = transitions >= 3;
-                    
-                    smoothLipDist = (lastLipDist * EMA_ALPHA) + (smoothLipDist * (1 - EMA_ALPHA));
-                    const lipChange = smoothLipDist / baselineLipDist;
-                    const smoothedMouthOpen = lipChange > 1.12;
-                    
-                    if (transitions >= 3) {
-                        currentJawState = "TALKING";
-                        talkingCooldown = 30; // 1s cooldown
-                        mouthOpenFrames = 0;
-                    } else if (talkingCooldown > 0) {
-                        talkingCooldown--;
-                        mouthOpenFrames = 0;
-                        if (!smoothedMouthOpen && talkingCooldown === 0) {
-                            currentJawState = "CLOSED";
-                        }
-                    } else if (smoothedMouthOpen) {
-                        currentJawState = "OPEN";
-                        mouthOpenFrames++;
-                    } else {
-                        currentJawState = "CLOSED";
-                        mouthOpenFrames = Math.max(0, mouthOpenFrames - 5);
-                    }
-                    
-                    const sustained = mouthOpenFrames > 150;
-                    alertStates.mouth = sustained;
-                    
-                    if (currentJawState === "TALKING") {
-                        updateMetric('m-jaw', "TALKING", false);
-                    } else if (currentJawState === "OPEN") {
-                        const seconds = Math.floor(mouthOpenFrames / 30);
-                        updateMetric('m-jaw', "OPEN " + seconds + "s", sustained);
-                    } else {
-                        updateMetric('m-jaw', "CLOSED", false);
-                    }
-                } else if (!isMouthVisible) {
-                    mouthStateHistory.length = 0;
-                    mouthOpenFrames = 0;
-                    currentJawState = "CLOSED";
-                    talkingCooldown = 0;
-                    alertStates.mouth = false;
-                    updateMetric('m-jaw', "BLOCKED", false);
-                } else {
-                    // Mouth is visible, but not calibrated yet
-                    mouthStateHistory.length = 0;
-                    mouthOpenFrames = 0;
-                    currentJawState = "CLOSED";
-                    talkingCooldown = 0;
-                    updateMetric('m-jaw', "NO CALIB", false);
-                }
-                
-                canvasCtx.fillStyle = '#f97316';
-                [face[13], face[14]].forEach(p => {
-                    canvasCtx.beginPath();
-                    canvasCtx.arc(p.x * canvasElement.width, p.y * canvasElement.height, 3, 0, 2 * Math.PI);
-                    canvasCtx.fill();
-                });
+                rawRotation -= baselineFaceRotation;
+                smoothFaceRotation = (rawRotation * CONFIG.EMA_ALPHA) + (smoothFaceRotation * (1 - CONFIG.EMA_ALPHA));
+                alertStates.rotation = Math.abs(smoothFaceRotation) > CONFIG.THRESHOLDS.rotation;
+                updateMetric('m-rotation', (smoothFaceRotation > 0 ? "R " : "L ") + Math.abs(smoothFaceRotation).toFixed(2), alertStates.rotation, Math.abs(smoothFaceRotation) / 0.4 * 100);
             } else {
-                mouthStateHistory.length = 0;
-                mouthOpenFrames = 0;
-                currentJawState = "CLOSED";
-                talkingCooldown = 0;
-                alertStates.mouth = false;
-                updateMetric('m-jaw', "NO FACE", false);
+                alertStates.rotation = false;
+                updateMetric('m-rotation', "BLOCKED", false, 0);
             }
 
-            if (isCalibrating) {
-                if (calibrationFrames < 90) {
-                    if (lastLipDist > 0) calibrationData.lipDist.push(lastLipDist);
-                    if (lastHeadRatio > 0) calibrationData.headRatio.push(lastHeadRatio);
-                    calibrationFrames++;
-                    
-                    const timeLeft = Math.ceil((90 - calibrationFrames) / 30);
-                    const btn = document.querySelector('.btn');
-                    if (btn && btn.innerText.includes('CALIBRATING')) {
-                        btn.innerText = `CALIBRATING (${timeLeft}s)...`;
-                    }
-                    
-                    // Draw overlay
-                    canvasCtx.save();
-                    canvasCtx.translate(W/2, H/2);
-                    canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
-                    canvasCtx.fillRect(-W/2, -H/2, W, H);
-                    canvasCtx.scale(-1, 1);
-                    canvasCtx.fillStyle = '#f97316';
-                    canvasCtx.font = 'bold 24px Inter';
-                    canvasCtx.textAlign = 'center';
-                    canvasCtx.fillText(`Calibrating... Keep still (${timeLeft}s)`, 0, 0);
-                    canvasCtx.restore();
-                    
-                    alertStates.shoulder = false;
-                    alertStates.rotation = false;
-                    alertStates.forward = false;
-                    alertStates.mouth = false;
+            let fwdExtra = 0;
+            if (faceVisible && shoulderVisible) {
+                lastHeadRatio = Math.hypot(leftEar.x - rightEar.x, leftEar.y - rightEar.y) / Math.hypot(leftS.x - rightS.x, leftS.y - rightS.y);
+                if (baselineHeadRatio > 0) {
+                    smoothHeadRatio = (lastHeadRatio * CONFIG.EMA_ALPHA) + (smoothHeadRatio * (1 - CONFIG.EMA_ALPHA));
+                    const forwardRatio = smoothHeadRatio / baselineHeadRatio;
+                    alertStates.forward = forwardRatio > CONFIG.THRESHOLDS.forward;
+                    fwdExtra = Math.round((forwardRatio-1)*100);
+                    updateMetric('m-forward', alertStates.forward ? "+" + fwdExtra + "%" : "NORMAL", alertStates.forward, Math.max(0, forwardRatio - 1) / 0.30 * 100);
+                } else updateMetric('m-forward', "NO CALIB", false, 0);
+            } else {
+                alertStates.forward = false;
+                updateMetric('m-forward', "BLOCKED", false, 0);
+            }
+
+            drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra, shoulderVisible, faceVisible);
+            return { mouthVisible: poseMouthUnoccluded };
+        }
+
+        function drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra, shoulderVisible, faceVisible) {
+            if (shoulderVisible) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(leftS.x * W, leftS.y * H);
+                canvasCtx.lineTo(rightS.x * W, rightS.y * H);
+                canvasCtx.lineWidth = 4;
+                canvasCtx.strokeStyle = alertStates.shoulder ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
+                canvasCtx.stroke();
+            }
+
+            let faceCenterX = 0, faceCenterY = 0;
+            if (faceVisible) {
+                faceCenterX = (leftEar.x + rightEar.x) / 2 * W;
+                faceCenterY = (leftEar.y + rightEar.y) / 2 * H;
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(nose.x * W, nose.y * H);
+                canvasCtx.lineTo(faceCenterX, faceCenterY);
+                canvasCtx.lineWidth = 3;
+                canvasCtx.strokeStyle = alertStates.rotation ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
+                canvasCtx.stroke();
+            }
+
+            const drawHUD = (text, x, y, isAlert) => {
+                canvasCtx.save();
+                canvasCtx.translate(x, y);
+                canvasCtx.scale(-1, 1);
+                canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
+                canvasCtx.beginPath();
+                canvasCtx.roundRect(-24, -14, 48, 20, 6);
+                canvasCtx.fill();
+                canvasCtx.fillStyle = isAlert ? '#f97316' : '#22c55e';
+                canvasCtx.font = 'bold 10px JetBrains Mono';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.fillText(text, 0, 0);
+                canvasCtx.restore();
+            };
+
+            if (shoulderVisible) drawHUD("S:" + Math.abs(smoothShoulderAngle).toFixed(0) + "°", leftS.x * W + 20, leftS.y * H - 15, alertStates.shoulder);
+            if (faceVisible) {
+                const rotDir = smoothFaceRotation > 0 ? "R:" : "L:";
+                drawHUD(rotDir + Math.abs(smoothFaceRotation).toFixed(2), faceCenterX, faceCenterY - 30, alertStates.rotation);
+                if (baselineHeadRatio > 0 && fwdExtra > 0) drawHUD("F:+" + fwdExtra + "%", nose.x * W, nose.y * H + 30, alertStates.forward);
+            }
+        }
+
+        function processMouth(results, W, H, poseMouthUnoccluded) {
+            if (!results.faceLandmarks) {
+                mouthStateHistory.length = 0; mouthOpenFrames = 0; currentJawState = "CLOSED"; talkingCooldown = 0;
+                alertStates.mouth = false; updateMetric('m-jaw', "NO FACE", false);
+                return;
+            }
+            const face = results.faceLandmarks;
+            const upperLip = face[13], lowerLip = face[14], forehead = face[10], chin = face[152];
+            const lipSep = Math.abs(lowerLip.y - upperLip.y), faceHeight = Math.abs(chin.y - forehead.y);
+            lastLipDist = lipSep / faceHeight;
+            const isVisible = upperLip.x >= 0 && upperLip.x <= 1 && upperLip.y >= 0 && upperLip.y <= 1 && poseMouthUnoccluded;
+
+            if (baselineLipDist > 0 && isVisible) {
+                const ratio = lastLipDist / baselineLipDist;
+                let lastState = mouthStateHistory.length > 0 ? mouthStateHistory[mouthStateHistory.length - 1] : false;
+                let currentRawState = lastState;
+                
+                // Hysteresis for jitter prevention
+                if (lastState && ratio < 1.06) currentRawState = false;
+                else if (!lastState && ratio > 1.14) currentRawState = true;
+                
+                mouthStateHistory.push(currentRawState);
+                if (mouthStateHistory.length > 30) mouthStateHistory.shift();
+                
+                let transitions = 0;
+                for (let i = 1; i < mouthStateHistory.length; i++) if (mouthStateHistory[i] !== mouthStateHistory[i-1]) transitions++;
+                
+                smoothLipDist = (lastLipDist * CONFIG.EMA_ALPHA) + (smoothLipDist * (1 - CONFIG.EMA_ALPHA));
+                const smoothedMouthOpen = (smoothLipDist / baselineLipDist) > CONFIG.THRESHOLDS.mouth;
+                
+                if (transitions >= 3) {
+                    currentJawState = "TALKING"; talkingCooldown = 30; mouthOpenFrames = 0;
+                } else if (talkingCooldown > 0) {
+                    talkingCooldown--; mouthOpenFrames = 0;
+                    if (!smoothedMouthOpen && talkingCooldown === 0) currentJawState = "CLOSED";
+                } else if (smoothedMouthOpen) {
+                    currentJawState = "OPEN"; mouthOpenFrames++;
                 } else {
-                    isCalibrating = false;
-                    calibrationData.lipDist.sort((a,b) => a-b);
-                    calibrationData.headRatio.sort((a,b) => a-b);
-                    
-                    if (calibrationData.lipDist.length > 0) {
-                        baselineLipDist = calibrationData.lipDist[Math.floor(calibrationData.lipDist.length / 2)];
-                        smoothLipDist = baselineLipDist;
-                    }
-                    if (calibrationData.headRatio.length > 0) {
-                        baselineHeadRatio = calibrationData.headRatio[Math.floor(calibrationData.headRatio.length / 2)];
-                        smoothHeadRatio = baselineHeadRatio;
-                    }
-                    
-                    calibrationData.shoulderAngle.sort((a,b) => a-b);
-                    calibrationData.faceRotation.sort((a,b) => a-b);
-                    
-                    if (calibrationData.shoulderAngle.length > 0) {
-                        baselineShoulderAngle = calibrationData.shoulderAngle[Math.floor(calibrationData.shoulderAngle.length / 2)];
-                        smoothShoulderAngle = 0;
-                    }
-                    if (calibrationData.faceRotation.length > 0) {
-                        baselineFaceRotation = calibrationData.faceRotation[Math.floor(calibrationData.faceRotation.length / 2)];
-                        smoothFaceRotation = 0;
-                    }
-                    
-                    mouthOpenFrames = 0;
-                    mouthStateHistory.length = 0;
-                    consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
-                    scoreHistory.length = 0;
-                    lastSampleTime = Date.now();
-                    
-                    if (chartWindowMin > 0) {
-                        const scoreEl = document.getElementById('current-score');
-                        if (scoreEl) {
-                            scoreEl.innerText = '100';
-                            scoreEl.style.color = '#22c55e';
-                        }
-                    }
-                    
-                    const btn = document.querySelector('.btn');
-                    const sidebar = document.getElementById('sidebar');
-                    if (sidebar) sidebar.style.background = 'rgba(34, 197, 94, 0.1)';
-                    if (btn) {
-                        btn.innerText = "CALIBRATED ✓";
-                        btn.style.color = 'var(--neon-green)';
-                        btn.style.borderColor = 'var(--neon-green)';
-                        setTimeout(() => { 
-                            if (sidebar) sidebar.style.background = '';
-                            btn.innerText = "Calibration (C)"; 
-                            btn.style.color = '';
-                            btn.style.borderColor = '';
-                        }, 1000);
-                    }
+                    currentJawState = "CLOSED"; mouthOpenFrames = Math.max(0, mouthOpenFrames - 5);
+                }
+                
+                alertStates.mouth = mouthOpenFrames > 150;
+                if (currentJawState === "TALKING") updateMetric('m-jaw', "TALKING", false);
+                else if (currentJawState === "OPEN") updateMetric('m-jaw', "OPEN " + Math.floor(mouthOpenFrames / 30) + "s", alertStates.mouth);
+                else updateMetric('m-jaw', "CLOSED", false);
+            } else {
+                mouthStateHistory.length = 0; mouthOpenFrames = 0; currentJawState = "CLOSED";
+                updateMetric('m-jaw', isVisible ? "NO CALIB" : "BLOCKED", false);
+            }
+            
+            canvasCtx.fillStyle = '#f97316';
+            [face[13], face[14]].forEach(p => {
+                canvasCtx.beginPath();
+                canvasCtx.arc(p.x * W, p.y * H, 3, 0, 2 * Math.PI);
+                canvasCtx.fill();
+            });
+        }
+
+        function handleCalibration(results, W, H) {
+            if (!isCalibrating) return;
+            if (calibrationFrames < CONFIG.CALIBRATION_FRAMES) {
+                if (lastLipDist > 0) calibrationData.lipDist.push(lastLipDist);
+                if (lastHeadRatio > 0) calibrationData.headRatio.push(lastHeadRatio);
+                calibrationFrames++;
+                
+                const timeLeft = Math.ceil((CONFIG.CALIBRATION_FRAMES - calibrationFrames) / 30);
+                const btn = document.getElementById('calibrate-btn');
+                if (btn) btn.innerText = `CALIBRATING (${timeLeft}s)...`;
+                
+                canvasCtx.save();
+                canvasCtx.translate(W/2, H/2);
+                canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
+                canvasCtx.fillRect(-W/2, -H/2, W, H);
+                canvasCtx.scale(-1, 1);
+                canvasCtx.fillStyle = '#f97316';
+                canvasCtx.font = 'bold 24px Inter';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.fillText(`Calibrating... Keep still (${timeLeft}s)`, 0, 0);
+                canvasCtx.restore();
+                
+                alertStates.shoulder = alertStates.rotation = alertStates.forward = alertStates.mouth = false;
+            } else {
+                isCalibrating = false;
+                const median = arr => {
+                    const s = [...arr].sort((a,b)=>a-b);
+                    return s.length > 0 ? s[Math.floor(s.length/2)] : 0;
+                };
+                baselineLipDist = median(calibrationData.lipDist);
+                smoothLipDist = baselineLipDist;
+                baselineHeadRatio = median(calibrationData.headRatio);
+                smoothHeadRatio = baselineHeadRatio;
+                baselineShoulderAngle = median(calibrationData.shoulderAngle);
+                smoothShoulderAngle = 0;
+                baselineFaceRotation = median(calibrationData.faceRotation);
+                smoothFaceRotation = 0;
+                
+                mouthOpenFrames = 0;
+                mouthStateHistory.length = 0;
+                consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
+                scoreHistory.length = 0;
+                lastSampleTime = Date.now();
+                
+                const btn = document.getElementById('calibrate-btn');
+                const sidebar = document.getElementById('sidebar');
+                if (sidebar) sidebar.style.background = 'rgba(34, 197, 94, 0.1)';
+                if (btn) {
+                    btn.innerText = "CALIBRATED ✓";
+                    btn.style.color = 'var(--neon-green)';
+                    btn.style.borderColor = 'var(--neon-green)';
+                    setTimeout(() => { 
+                        if (sidebar) sidebar.style.background = '';
+                        btn.innerText = "Calibration (C)"; 
+                        btn.style.color = ''; btn.style.borderColor = '';
+                    }, 1000);
                 }
             }
+        }
 
-            canvasCtx.restore();
-
-            if (isCalibrating) return; // Skip 1Hz sampling while calibrating
-
-            // --- Sample at 1Hz ---
+        function updateAppScore() {
+            if (isCalibrating) return;
             const now = Date.now();
             if (chartWindowMin > 0 && now - lastSampleTime >= 1000) {
                 lastSampleTime = now;
@@ -757,7 +741,6 @@
                     forwardAlert: alertStates.forward,
                     mouthAlert: alertStates.mouth
                 });
-                
                 const cutoff = now - chartWindowMin * 60 * 1000;
                 while (scoreHistory.length > 0 && scoreHistory[0].t < cutoff) scoreHistory.shift();
                 
@@ -767,6 +750,16 @@
                 if (currentScore < 40) playAlertSound();
                 drawChart();
             }
+        }
+
+        function onResults(results) {
+            const { W, H } = setupCanvas(results);
+            handleZenMode(results, W, H);
+            const { mouthVisible } = processPosture(results, W, H);
+            processMouth(results, W, H, mouthVisible);
+            handleCalibration(results, W, H);
+            canvasCtx.restore();
+            updateAppScore();
         }
 
         // --- Chart ---
@@ -982,7 +975,7 @@
             calibrationFrames = 0;
             calibrationData = { lipDist: [], headRatio: [], shoulderAngle: [], faceRotation: [] };
             
-            const btn = document.querySelector('.btn');
+            const btn = document.getElementById('calibrate-btn');
             if (btn) {
                 btn.innerText = "CALIBRATING (3s)...";
                 btn.style.color = '#f97316';
@@ -991,7 +984,7 @@
         }
 
         if (typeof Holistic === 'undefined') {
-            alert("脚本文件加载失败，请检查网络！");
+            alert("Script failed to load. Check network.");
         }
 
         const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}` });
@@ -1005,8 +998,10 @@
         
         holistic.initialize().then(() => {
             console.log("Holistic Initialized");
+            document.getElementById('loading-overlay').classList.add('hidden');
+            showToast('AI Models Loaded');
         }).catch(err => {
-            alert("AI模型内部初始化失败（通常是网络导致WASM下载中断）:\n" + err);
+            showToast('AI Init Failed: ' + err, 10000);
         });
 
         const camera = new Camera(videoElement, {
@@ -1015,24 +1010,21 @@
                     await holistic.send({image: videoElement}); 
                 } catch(e) {
                     console.error("Holistic Send Error:", e);
-                    // Do not alert every frame to avoid freezing the browser, just the first time
                     if (!window.hasAlertedSendError) {
-                        alert("处理图像帧失败: " + e.message);
+                        showToast('Frame Processing Failed: ' + e.message, 5000);
                         window.hasAlertedSendError = true;
                     }
                 }
             }
         });
         camera.start().catch(err => {
-            alert('摄像头加载失败！\n可能原因：\n1. 被其他程序(如会议软件)占用\n2. 浏览器权限被拒绝\n3. 报错详情: ' + err.message);
-            console.error('Camera Error:', err);
+            showToast('Camera Init Failed: ' + err.message, 10000);
         });
         
         document.addEventListener('keydown', (e) => {
             if (e.key.toLowerCase() === 'c') calibrate();
         });
         
-        // Initial paint for OFF state
         setTimeout(drawChart, 100);
     </script>
 </body>

@@ -45,7 +45,10 @@
             box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05); 
             background: #000;
             max-width: 100%;
+            max-height: 100%;
             display: flex;
+            justify-content: center;
+            align-items: center;
         }
         video { display: none; }
         canvas#output_canvas { 
@@ -54,6 +57,8 @@
             display: block; 
             border-radius: 16px; 
             max-width: 100%; 
+            max-height: 100%;
+            width: auto;
             height: auto; 
             object-fit: contain; 
         }
@@ -183,7 +188,7 @@
     <div id="visual-stream">
         <div class="container">
             <video id="input_video"></video>
-            <canvas id="output_canvas" width="800px" height="600px"></canvas>
+            <canvas id="output_canvas"></canvas>
         </div>
     </div>
     <div id="sidebar">
@@ -319,6 +324,10 @@
         }
 
         function onResults(results) {
+            if (canvasElement.width !== results.image.width || canvasElement.height !== results.image.height) {
+                canvasElement.width = results.image.width;
+                canvasElement.height = results.image.height;
+            }
             canvasCtx.save();
             const W = canvasElement.width, H = canvasElement.height;
             canvasCtx.clearRect(0, 0, W, H);
@@ -789,8 +798,7 @@
         holistic.onResults(onResults);
 
         const camera = new Camera(videoElement, {
-            onFrame: async () => { await holistic.send({image: videoElement}); },
-            width: 800, height: 600
+            onFrame: async () => { await holistic.send({image: videoElement}); }
         });
         camera.start();
         

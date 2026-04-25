@@ -50,7 +50,13 @@
             justify-content: center;
             align-items: center;
         }
-        video { display: none; }
+        video { 
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
         canvas#output_canvas { 
             filter: brightness(1.05) contrast(1.05); 
             display: block; 
@@ -223,7 +229,7 @@
     <div id="toast-container"></div>
     <div id="visual-stream">
         <div class="container">
-            <video id="input_video"></video>
+            <video id="input_video" playsinline muted autoplay></video>
             <canvas id="output_canvas"></canvas>
         </div>
     </div>
@@ -996,30 +1002,52 @@
         });
         holistic.onResults(onResults);
         
-        holistic.initialize().then(() => {
-            console.log("Holistic Initialized");
-            document.getElementById('loading-overlay').classList.add('hidden');
-            showToast('AI Models Loaded');
-        }).catch(err => {
-            showToast('AI Init Failed: ' + err, 10000);
-        });
+        async function startSystem() {
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = overlay.querySelector('.loading-text');
+            
+            try {
+                // 1. 初始化 AI 模型
+                loadingText.innerText = "Initializing AI Models...";
+                await holistic.initialize();
+                console.log("Holistic Initialized");
+                
+                // 2. 准备相机
+                loadingText.innerText = "Starting Camera...";
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => { 
+                        try {
+                            await holistic.send({image: videoElement}); 
+                        } catch(e) {
+                            console.error("Frame processing error:", e);
+                        }
+                    },
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    facingMode: 'user'
+                });
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { 
-                try {
-                    await holistic.send({image: videoElement}); 
-                } catch(e) {
-                    console.error("Holistic Send Error:", e);
-                    if (!window.hasAlertedSendError) {
-                        showToast('Frame Processing Failed: ' + e.message, 5000);
-                        window.hasAlertedSendError = true;
-                    }
-                }
+                // 3. 启动相机
+                await camera.start().catch(err => {
+                    throw new Error("Camera access denied or failed: " + err.message);
+                });
+
+                // 4. 全部准备好后再关闭 Loading
+                overlay.classList.add('hidden');
+                showToast('AI Systems Online');
+                
+            } catch (err) {
+                console.error("Initialization failed:", err);
+                loadingText.innerHTML = `
+                    <div style="color: #f97316; margin-bottom: 10px;">INITIALIZATION FAILED</div>
+                    <div style="font-size: 0.65rem; text-transform: none; margin-bottom: 20px; color: #a1a1aa; max-width: 250px;">${err.message}</div>
+                    <button class="btn" onclick="location.reload()" style="padding: 10px 20px;">RETRY</button>
+                `;
             }
-        });
-        camera.start().catch(err => {
-            showToast('Camera Init Failed: ' + err.message, 10000);
-        });
+        }
+
+        // 启动系统
+        startSystem();
         
         document.addEventListener('keydown', (e) => {
             if (e.key.toLowerCase() === 'c') calibrate();

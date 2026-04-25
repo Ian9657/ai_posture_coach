@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>POSTURE CORE v2.5</title>
+    <title>POSTURE CORE v2.5.2</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -191,7 +191,7 @@
         </div>
     </div>
     <div id="sidebar">
-        <h1>POSTURE_CORE_v2.5</h1>
+        <h1>POSTURE_CORE_v2.5.2</h1>
         
         <div class="metric" id="m-shoulder">
             <div class="label">Shoulders</div>
@@ -990,6 +990,10 @@
             }
         }
 
+        if (typeof Holistic === 'undefined') {
+            alert("脚本文件加载失败，请检查网络！");
+        }
+
         const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}` });
         holistic.setOptions({
             modelComplexity: 0,
@@ -998,11 +1002,31 @@
             refineFaceLandmarks: false
         });
         holistic.onResults(onResults);
+        
+        holistic.initialize().then(() => {
+            console.log("Holistic Initialized");
+        }).catch(err => {
+            alert("AI模型内部初始化失败（通常是网络导致WASM下载中断）:\n" + err);
+        });
 
         const camera = new Camera(videoElement, {
-            onFrame: async () => { await holistic.send({image: videoElement}); }
+            onFrame: async () => { 
+                try {
+                    await holistic.send({image: videoElement}); 
+                } catch(e) {
+                    console.error("Holistic Send Error:", e);
+                    // Do not alert every frame to avoid freezing the browser, just the first time
+                    if (!window.hasAlertedSendError) {
+                        alert("处理图像帧失败: " + e.message);
+                        window.hasAlertedSendError = true;
+                    }
+                }
+            }
         });
-        camera.start();
+        camera.start().catch(err => {
+            alert('摄像头加载失败！\n可能原因：\n1. 被其他程序(如会议软件)占用\n2. 浏览器权限被拒绝\n3. 报错详情: ' + err.message);
+            console.error('Camera Error:', err);
+        });
         
         document.addEventListener('keydown', (e) => {
             if (e.key.toLowerCase() === 'c') calibrate();

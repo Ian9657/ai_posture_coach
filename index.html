@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>POSTURE CORE v2.0</title>
+    <title>POSTURE CORE v2.5</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -89,7 +89,7 @@
         .metric.alert::before { background: var(--accent); }
         
         .label { font-size: 0.7rem; color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
-        .value { font-family: 'JetBrains Mono', monospace; font-size: 1.25rem; color: var(--neon-green); margin-top: 8px; font-weight: 700; text-shadow: 0 0 10px var(--neon-green-glow); }
+        .value { font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; color: var(--neon-green); margin-top: 8px; font-weight: 700; text-shadow: 0 0 10px var(--neon-green-glow); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .metric.alert .value { color: var(--accent); text-shadow: 0 0 10px var(--accent-glow); }
         
         .gauge-bg { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 12px; overflow: hidden; position: relative; }
@@ -191,7 +191,7 @@
         </div>
     </div>
     <div id="sidebar">
-        <h1>POSTURE_CORE_v2.0</h1>
+        <h1>POSTURE_CORE_v2.5</h1>
         
         <div class="metric" id="m-shoulder">
             <div class="label">Shoulders</div>
@@ -234,9 +234,9 @@
             <canvas id="chart_canvas" height="120"></canvas>
         </div>
 
-        <div style="display: flex; gap: 8px; flex-shrink: 0;">
-            <button class="btn" style="flex: 2;" onclick="calibrate()">Calibration (C)</button>
-            <button class="btn" id="zen-btn" style="flex: 1; padding: 14px 0;" onclick="toggleZen()">Zen Mode</button>
+        <div style="display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap;">
+            <button class="btn" style="flex: 2; min-width: 120px;" onclick="calibrate()">Calibration (C)</button>
+            <button class="btn" id="zen-btn" style="flex: 1; min-width: 90px; padding: 14px 0;" onclick="toggleZen()">Zen Mode</button>
         </div>
         <button class="btn" id="pip-btn" style="width: 100%;" onclick="togglePiP()">PIP</button>
         
@@ -254,6 +254,14 @@
         let baselineHeadRatio = 0, lastHeadRatio = 0, smoothHeadRatio = 0;
         let smoothShoulderAngle = 0, smoothFaceRotation = 0, smoothLipDist = 0;
         let mouthOpenFrames = 0;
+        let mouthStateHistory = [];
+        let currentJawState = "CLOSED";
+        let talkingCooldown = 0;
+        let isCalibrating = false;
+        let calibrationFrames = 0;
+        let calibrationData = { lipDist: [], headRatio: [], shoulderAngle: [], faceRotation: [] };
+        let baselineShoulderAngle = 0;
+        let baselineFaceRotation = 0;
         let isZenMode = false;
         
         const domCache = {};
@@ -443,8 +451,20 @@
                 poseMouthUnoccluded = mouthL.visibility > VIS_THRESH && mouthR.visibility > VIS_THRESH;
                 
                 if (shoulderVisible) {
-                    const rawAngle = Math.atan2(leftS.y - rightS.y, leftS.x - rightS.x) * (180 / Math.PI);
-                    smoothShoulderAngle = (rawAngle * EMA_ALPHA) + (smoothShoulderAngle * (1 - EMA_ALPHA));
+                    // Use 2D landmarks with aspect ratio correction for accurate angle
+                    const dy = (leftS.y - rightS.y) * H;
+                    const dx = (leftS.x - rightS.x) * W;
+                    const rawAngle = Math.atan2(dy, dx) * (180 / Math.PI);
+                    
+                    if (isCalibrating && calibrationFrames < 90) {
+                        calibrationData.shoulderAngle.push(rawAngle);
+                    }
+                    
+                    const corrected = rawAngle - baselineShoulderAngle;
+                    
+                    // Heavier smoothing (alpha=0.10) to filter head-turn crosstalk
+                    const SHOULDER_ALPHA = 0.10;
+                    smoothShoulderAngle = (corrected * SHOULDER_ALPHA) + (smoothShoulderAngle * (1 - SHOULDER_ALPHA));
                     alertStates.shoulder = Math.abs(smoothShoulderAngle) > 4.5;
                     const shoulderPct = Math.abs(smoothShoulderAngle) / 8 * 100;
                     updateMetric('m-shoulder', smoothShoulderAngle.toFixed(2) + "°", alertStates.shoulder, shoulderPct);
@@ -456,8 +476,15 @@
                 if (faceVisible) {
                     const distL = Math.abs(nose.x - leftEar.x);
                     const distR = Math.abs(nose.x - rightEar.x);
-                    const rotationRatio = (distL - distR) / (distL + distR);
-                    smoothFaceRotation = (rotationRatio * EMA_ALPHA) + (smoothFaceRotation * (1 - EMA_ALPHA));
+                    let rawRotation = (distL - distR) / (distL + distR);
+                    
+                    if (isCalibrating && calibrationFrames < 90) {
+                        calibrationData.faceRotation.push(rawRotation);
+                    }
+                    
+                    rawRotation -= baselineFaceRotation;
+                    
+                    smoothFaceRotation = (rawRotation * EMA_ALPHA) + (smoothFaceRotation * (1 - EMA_ALPHA));
                     alertStates.rotation = Math.abs(smoothFaceRotation) > 0.20;
                     const rotPct = Math.abs(smoothFaceRotation) / 0.4 * 100;
                     updateMetric('m-rotation', (smoothFaceRotation > 0 ? "R " : "L ") + Math.abs(smoothFaceRotation).toFixed(2), alertStates.rotation, rotPct);
@@ -480,7 +507,7 @@
                         const fwdPct = Math.max(0, forwardRatio - 1) / 0.30 * 100;
                         updateMetric('m-forward', forwardRatio > 1.15 ? "+" + fwdExtra + "%" : "NORMAL", alertStates.forward, fwdPct);
                     } else {
-                        updateMetric('m-forward', "UNCALIBRATED", false, 0);
+                        updateMetric('m-forward', "NO CALIB", false, 0);
                     }
                 } else {
                     alertStates.forward = false;
@@ -548,28 +575,70 @@
                 const isMouthVisible = isMouthInFrame && poseMouthUnoccluded;
                 
                 if (baselineLipDist > 0 && isMouthVisible) {
+                    const ratio = lastLipDist / baselineLipDist;
+                    let lastState = mouthStateHistory.length > 0 ? mouthStateHistory[mouthStateHistory.length - 1] : false;
+                    let currentRawState = lastState;
+                    // 增加迟滞（Hysteresis），防止在临界点微小抖动被判定为快速开合（说话）
+                    if (lastState && ratio < 1.06) currentRawState = false;
+                    else if (!lastState && ratio > 1.14) currentRawState = true;
+                    
+                    mouthStateHistory.push(currentRawState);
+                    if (mouthStateHistory.length > 30) mouthStateHistory.shift();
+                    
+                    let transitions = 0;
+                    for (let i = 1; i < mouthStateHistory.length; i++) {
+                        if (mouthStateHistory[i] !== mouthStateHistory[i-1]) transitions++;
+                    }
+                    
+                    const isTalking = transitions >= 3;
+                    
                     smoothLipDist = (lastLipDist * EMA_ALPHA) + (smoothLipDist * (1 - EMA_ALPHA));
                     const lipChange = smoothLipDist / baselineLipDist;
-                    const mouthOpen = lipChange > 1.12;
+                    const smoothedMouthOpen = lipChange > 1.12;
                     
-                    if (mouthOpen) mouthOpenFrames++;
-                    else mouthOpenFrames = 0;
+                    if (transitions >= 3) {
+                        currentJawState = "TALKING";
+                        talkingCooldown = 30; // 1s cooldown
+                        mouthOpenFrames = 0;
+                    } else if (talkingCooldown > 0) {
+                        talkingCooldown--;
+                        mouthOpenFrames = 0;
+                        if (!smoothedMouthOpen && talkingCooldown === 0) {
+                            currentJawState = "CLOSED";
+                        }
+                    } else if (smoothedMouthOpen) {
+                        currentJawState = "OPEN";
+                        mouthOpenFrames++;
+                    } else {
+                        currentJawState = "CLOSED";
+                        mouthOpenFrames = Math.max(0, mouthOpenFrames - 5);
+                    }
                     
                     const sustained = mouthOpenFrames > 150;
-                    const seconds = Math.floor(mouthOpenFrames / 30);
                     alertStates.mouth = sustained;
                     
-                    if (sustained) updateMetric('m-jaw', "OPEN " + seconds + "s", true);
-                    else if (mouthOpen) updateMetric('m-jaw', "monitoring...", false);
-                    else updateMetric('m-jaw', "CLOSED", false);
+                    if (currentJawState === "TALKING") {
+                        updateMetric('m-jaw', "TALKING", false);
+                    } else if (currentJawState === "OPEN") {
+                        const seconds = Math.floor(mouthOpenFrames / 30);
+                        updateMetric('m-jaw', "OPEN " + seconds + "s", sustained);
+                    } else {
+                        updateMetric('m-jaw', "CLOSED", false);
+                    }
                 } else if (!isMouthVisible) {
+                    mouthStateHistory.length = 0;
                     mouthOpenFrames = 0;
+                    currentJawState = "CLOSED";
+                    talkingCooldown = 0;
                     alertStates.mouth = false;
                     updateMetric('m-jaw', "BLOCKED", false);
                 } else {
                     // Mouth is visible, but not calibrated yet
+                    mouthStateHistory.length = 0;
                     mouthOpenFrames = 0;
-                    updateMetric('m-jaw', "UNCALIBRATED", false);
+                    currentJawState = "CLOSED";
+                    talkingCooldown = 0;
+                    updateMetric('m-jaw', "NO CALIB", false);
                 }
                 
                 canvasCtx.fillStyle = '#f97316';
@@ -579,12 +648,102 @@
                     canvasCtx.fill();
                 });
             } else {
+                mouthStateHistory.length = 0;
                 mouthOpenFrames = 0;
+                currentJawState = "CLOSED";
+                talkingCooldown = 0;
                 alertStates.mouth = false;
                 updateMetric('m-jaw', "NO FACE", false);
             }
 
+            if (isCalibrating) {
+                if (calibrationFrames < 90) {
+                    if (lastLipDist > 0) calibrationData.lipDist.push(lastLipDist);
+                    if (lastHeadRatio > 0) calibrationData.headRatio.push(lastHeadRatio);
+                    calibrationFrames++;
+                    
+                    const timeLeft = Math.ceil((90 - calibrationFrames) / 30);
+                    const btn = document.querySelector('.btn');
+                    if (btn && btn.innerText.includes('CALIBRATING')) {
+                        btn.innerText = `CALIBRATING (${timeLeft}s)...`;
+                    }
+                    
+                    // Draw overlay
+                    canvasCtx.save();
+                    canvasCtx.translate(W/2, H/2);
+                    canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
+                    canvasCtx.fillRect(-W/2, -H/2, W, H);
+                    canvasCtx.scale(-1, 1);
+                    canvasCtx.fillStyle = '#f97316';
+                    canvasCtx.font = 'bold 24px Inter';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.fillText(`Calibrating... Keep still (${timeLeft}s)`, 0, 0);
+                    canvasCtx.restore();
+                    
+                    alertStates.shoulder = false;
+                    alertStates.rotation = false;
+                    alertStates.forward = false;
+                    alertStates.mouth = false;
+                } else {
+                    isCalibrating = false;
+                    calibrationData.lipDist.sort((a,b) => a-b);
+                    calibrationData.headRatio.sort((a,b) => a-b);
+                    
+                    if (calibrationData.lipDist.length > 0) {
+                        baselineLipDist = calibrationData.lipDist[Math.floor(calibrationData.lipDist.length / 2)];
+                        smoothLipDist = baselineLipDist;
+                    }
+                    if (calibrationData.headRatio.length > 0) {
+                        baselineHeadRatio = calibrationData.headRatio[Math.floor(calibrationData.headRatio.length / 2)];
+                        smoothHeadRatio = baselineHeadRatio;
+                    }
+                    
+                    calibrationData.shoulderAngle.sort((a,b) => a-b);
+                    calibrationData.faceRotation.sort((a,b) => a-b);
+                    
+                    if (calibrationData.shoulderAngle.length > 0) {
+                        baselineShoulderAngle = calibrationData.shoulderAngle[Math.floor(calibrationData.shoulderAngle.length / 2)];
+                        smoothShoulderAngle = 0;
+                    }
+                    if (calibrationData.faceRotation.length > 0) {
+                        baselineFaceRotation = calibrationData.faceRotation[Math.floor(calibrationData.faceRotation.length / 2)];
+                        smoothFaceRotation = 0;
+                    }
+                    
+                    mouthOpenFrames = 0;
+                    mouthStateHistory.length = 0;
+                    consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
+                    scoreHistory.length = 0;
+                    lastSampleTime = Date.now();
+                    
+                    if (chartWindowMin > 0) {
+                        const scoreEl = document.getElementById('current-score');
+                        if (scoreEl) {
+                            scoreEl.innerText = '100';
+                            scoreEl.style.color = '#22c55e';
+                        }
+                    }
+                    
+                    const btn = document.querySelector('.btn');
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar) sidebar.style.background = 'rgba(34, 197, 94, 0.1)';
+                    if (btn) {
+                        btn.innerText = "CALIBRATED ✓";
+                        btn.style.color = 'var(--neon-green)';
+                        btn.style.borderColor = 'var(--neon-green)';
+                        setTimeout(() => { 
+                            if (sidebar) sidebar.style.background = '';
+                            btn.innerText = "Calibration (C)"; 
+                            btn.style.color = '';
+                            btn.style.borderColor = '';
+                        }, 1000);
+                    }
+                }
+            }
+
             canvasCtx.restore();
+
+            if (isCalibrating) return; // Skip 1Hz sampling while calibrating
 
             // --- Sample at 1Hz ---
             const now = Date.now();
@@ -818,31 +977,17 @@
         }
 
         function calibrate() {
-            baselineLipDist = lastLipDist;
-            smoothLipDist = lastLipDist;
-            baselineHeadRatio = lastHeadRatio;
-            smoothHeadRatio = lastHeadRatio;
-            mouthOpenFrames = 0;
-            consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
-            scoreHistory.length = 0;
-            lastSampleTime = Date.now();
+            if (isCalibrating) return;
+            isCalibrating = true;
+            calibrationFrames = 0;
+            calibrationData = { lipDist: [], headRatio: [], shoulderAngle: [], faceRotation: [] };
             
-            if (chartWindowMin > 0) {
-                document.getElementById('current-score').innerText = '100';
-                document.getElementById('current-score').style.color = '#22c55e';
-            }
             const btn = document.querySelector('.btn');
-            const sidebar = document.getElementById('sidebar');
-            sidebar.style.background = 'rgba(34, 197, 94, 0.1)';
-            btn.innerText = "CALIBRATED ✓";
-            btn.style.color = 'var(--neon-green)';
-            btn.style.borderColor = 'var(--neon-green)';
-            setTimeout(() => { 
-                sidebar.style.background = '';
-                btn.innerText = "Calibration (C)"; 
-                btn.style.color = '';
-                btn.style.borderColor = '';
-            }, 800);
+            if (btn) {
+                btn.innerText = "CALIBRATING (3s)...";
+                btn.style.color = '#f97316';
+                btn.style.borderColor = '#f97316';
+            }
         }
 
         const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}` });

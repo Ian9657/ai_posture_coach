@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>POSTURE CORE v1.7</title>
+    <title>POSTURE CORE v2.0</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -52,7 +52,6 @@
         }
         video { display: none; }
         canvas#output_canvas { 
-            transform: rotateY(180deg); 
             filter: brightness(1.05) contrast(1.05); 
             display: block; 
             border-radius: 16px; 
@@ -130,12 +129,12 @@
         .chart-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px; }
         .chart-title { font-size: 0.7rem; color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
         .chart-score { font-family: 'JetBrains Mono', monospace; font-size: 1.5rem; font-weight: 700; color: var(--neon-green); text-shadow: 0 0 10px var(--neon-green-glow); line-height: 1; }
-        .time-btns { display: flex; flex-wrap: wrap; gap: 4px; background: rgba(0,0,0,0.3); padding: 4px; border-radius: 6px; }
+        .time-btns { display: flex; flex-wrap: nowrap; gap: 2px; background: rgba(0,0,0,0.3); padding: 4px; border-radius: 6px; }
         .time-btn { 
             background: transparent; 
             border: none; 
             color: var(--text); 
-            padding: 4px 8px; 
+            padding: 4px 6px; 
             border-radius: 4px;
             cursor: pointer; 
             font-family: 'Inter', sans-serif; 
@@ -192,7 +191,7 @@
         </div>
     </div>
     <div id="sidebar">
-        <h1>POSTURE_CORE_v1.7</h1>
+        <h1>POSTURE_CORE_v2.0</h1>
         
         <div class="metric" id="m-shoulder">
             <div class="label">Shoulders</div>
@@ -239,6 +238,7 @@
             <button class="btn" style="flex: 2;" onclick="calibrate()">Calibration (C)</button>
             <button class="btn" id="zen-btn" style="flex: 1; padding: 14px 0;" onclick="toggleZen()">Zen Mode</button>
         </div>
+        <button class="btn" id="pip-btn" style="width: 100%;" onclick="togglePiP()">PIP</button>
         
         <div class="footer-info">
             WEIGHTS: S25 R25 F30 M20<br>
@@ -269,6 +269,61 @@
             b.style.borderColor = isZenMode ? 'rgba(34, 197, 94, 0.3)' : '';
             b.innerText = isZenMode ? 'Zen: ON' : 'Zen Mode';
         }
+
+        let pipVideo = null;
+        async function togglePiP() {
+            if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                alert('悬浮窗功能仅支持 PC 端网页使用。');
+                return;
+            }
+            if (!document.pictureInPictureEnabled) {
+                alert('你的浏览器不支持悬浮窗功能。');
+                return;
+            }
+
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+            } else {
+                if (!pipVideo) {
+                    pipVideo = document.createElement('video');
+                    pipVideo.muted = true;
+                    pipVideo.autoplay = true;
+                    pipVideo.playsInline = true;
+                    // Append hidden video to dom to satisfy some browsers
+                    pipVideo.style.position = 'fixed';
+                    pipVideo.style.opacity = '0';
+                    pipVideo.style.pointerEvents = 'none';
+                    pipVideo.style.width = '1px';
+                    pipVideo.style.height = '1px';
+                    document.body.appendChild(pipVideo);
+                    
+                    pipVideo.srcObject = canvasElement.captureStream(30);
+                    
+                    pipVideo.addEventListener('enterpictureinpicture', () => {
+                        const btn = document.getElementById('pip-btn');
+                        btn.innerText = 'CLOSE PIP';
+                        btn.style.color = 'var(--neon-green)';
+                        btn.style.borderColor = 'rgba(34, 197, 94, 0.3)';
+                        btn.style.background = 'rgba(34, 197, 94, 0.15)';
+                    });
+                    pipVideo.addEventListener('leavepictureinpicture', () => {
+                        const btn = document.getElementById('pip-btn');
+                        btn.innerText = 'PIP';
+                        btn.style.color = '';
+                        btn.style.borderColor = '';
+                        btn.style.background = '';
+                    });
+                }
+                try {
+                    await pipVideo.play();
+                    await pipVideo.requestPictureInPicture();
+                } catch (error) {
+                    console.error(error);
+                    alert('开启悬浮窗失败: ' + error.message);
+                }
+            }
+        }
+
         const EMA_ALPHA = 0.15;
 
         // --- Cumulative Scoring ---
@@ -331,6 +386,8 @@
             canvasCtx.save();
             const W = canvasElement.width, H = canvasElement.height;
             canvasCtx.clearRect(0, 0, W, H);
+            canvasCtx.translate(W, 0);
+            canvasCtx.scale(-1, 1);
             
             if (isZenMode) {
                 if (!cachedBgGrad) {
@@ -502,7 +559,7 @@
                     const seconds = Math.floor(mouthOpenFrames / 30);
                     alertStates.mouth = sustained;
                     
-                    if (sustained) updateMetric('m-jaw', "口呼吸 " + seconds + "s", true);
+                    if (sustained) updateMetric('m-jaw', "OPEN " + seconds + "s", true);
                     else if (mouthOpen) updateMetric('m-jaw', "monitoring...", false);
                     else updateMetric('m-jaw', "CLOSED", false);
                 } else if (!isMouthVisible) {

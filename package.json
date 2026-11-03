@@ -1,0 +1,14 @@
+{
+  "name": "ai-posture-coach",
+  "version": "2.6.0",
+  "private": true,
+  "description": "In-browser webcam posture monitor built on MediaPipe Holistic. The site has no build step; npm scripts are dev tooling.",
+  "author": "Ian9657",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ian9657/ai_posture_coach.git"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

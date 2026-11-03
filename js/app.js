@@ -14,7 +14,7 @@ const CONFIG = {
 };
 
 const { ema, median, shoulderAngle, faceRotation, headRatio, lipDistance,
-        mouthHysteresis, countTransitions, scoreTick, analyzeSegment } = PostureCore;
+        mouthHysteresis, countTransitions, freshCounters, scoreTick, analyzeSegment } = PostureCore;
 
 const videoElement = document.getElementById('input_video');
 const canvasElement = document.getElementById('output_canvas');
@@ -119,7 +119,7 @@ const EMA_ALPHA = 0.15;
 // --- Cumulative Scoring ---
 const WEIGHTS = { shoulder: 0.25, rotation: 0.25, forward: 0.3, mouth: 0.2 };
 const RAMP_SEC = 30; // seconds to reach full penalty
-let consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
+let consecutiveAlert = freshCounters();
 let alertStates = { shoulder: false, rotation: false, forward: false, mouth: false };
 
 // History stores raw values for segment analysis
@@ -388,7 +388,7 @@ function handleCalibration(results, W, H) {
         
         mouthOpenFrames = 0;
         mouthStateHistory.length = 0;
-        consecutiveAlert = { shoulder: 0, rotation: 0, forward: 0, mouth: 0 };
+        consecutiveAlert = freshCounters();
         scoreHistory.length = 0;
         lastSampleTime = Date.now();
         
@@ -513,15 +513,15 @@ function onResults(results) {
 const chartCanvas = document.getElementById('chart_canvas');
 const chartCtx = chartCanvas.getContext('2d');
 
-function setChartWindow(min) {
+function setChartWindow(min, btn) {
     if (chartWindowMin === min) return;
     chartWindowMin = min;
     document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
+    btn.classList.add('active');
     
     // Restart assessment
     scoreHistory.length = 0;
-    consecutiveAlert = { shoulder: 0, rotation: 0, mouth: 0 };
+    consecutiveAlert = freshCounters();
     document.getElementById('current-score').innerText = min === 0 ? '--' : '100';
     document.getElementById('current-score').style.color = '#22c55e';
     

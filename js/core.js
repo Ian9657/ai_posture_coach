@@ -56,13 +56,21 @@
         return n;
     }
 
+    // Zeroed alert counters, one per metric.
+    function freshCounters() {
+        const c = {};
+        for (const key of METRICS) c[key] = 0;
+        return c;
+    }
+
     // One scoring tick (called once per second). Mutates `consecutive`:
     // +1 per second in alert (capped at rampSec), -0.5 per second otherwise.
     // Returns 0..100.
     function scoreTick(consecutive, alerts, weights, rampSec) {
         for (const key of METRICS) {
-            if (alerts[key]) consecutive[key] = Math.min(rampSec, consecutive[key] + 1);
-            else consecutive[key] = Math.max(0, consecutive[key] - 0.5);
+            const prev = consecutive[key] || 0; // a missing counter counts as 0, never NaN
+            if (alerts[key]) consecutive[key] = Math.min(rampSec, prev + 1);
+            else consecutive[key] = Math.max(0, prev - 0.5);
         }
         let totalPenalty = 0;
         for (const key of METRICS) totalPenalty += weights[key] * (consecutive[key] / rampSec);
@@ -90,7 +98,7 @@
     }
 
     const PostureCore = {
-        METRICS, ema, median, shoulderAngle, faceRotation, headRatio,
+        METRICS, freshCounters, ema, median, shoulderAngle, faceRotation, headRatio,
         lipDistance, mouthHysteresis, countTransitions, scoreTick, analyzeSegment
     };
 

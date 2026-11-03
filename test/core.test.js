@@ -99,3 +99,18 @@ test('analyzeSegment averages magnitudes and alert percentages', () => {
     assert.equal(seg.mouthPct, 0);
     assert.equal(seg.avgScore, 75);
 });
+
+test('freshCounters has a zero for every metric', () => {
+    assert.deepEqual(C.freshCounters(), { shoulder: 0, rotation: 0, forward: 0, mouth: 0 });
+});
+
+test('scoreTick never returns NaN when a counter is missing (#13)', () => {
+    const W = { shoulder: 0.25, rotation: 0.25, forward: 0.3, mouth: 0.2 };
+    const alerts = { shoulder: false, rotation: false, forward: true, mouth: false };
+    // the old chart-window reset left out `forward`
+    const cons = { shoulder: 0, rotation: 0, mouth: 0 };
+    const score = C.scoreTick(cons, alerts, W, 30);
+    assert.ok(Number.isFinite(score));
+    assert.equal(cons.forward, 1);
+    assert.equal(score, Math.round(100 * (1 - 0.3 / 30)));
+});

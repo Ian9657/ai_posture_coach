@@ -40,10 +40,10 @@ Weights (inherited): shoulders 0.25, rotation 0.25, forward head 0.30, mouth 0.2
 ## Known issues behind these numbers
 
 - Frame-count timings (90 calibration frames, 150 mouth frames, 30-frame talking window) assume 30 fps and stretch on slower machines: #14.
-- Switching the chart window drops the `forward` counter and turns the score into NaN: #13.
 
 ---
 
 ## Log
 
 - 2026-11-03: file created; all values recorded as inherited from v2.6.0.
+- 2026-11-03: #13 fixed. In v2.6.0 every chart-window click reset the counters without `forward`, so the score read NaN until the next calibration.

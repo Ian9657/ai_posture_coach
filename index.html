@@ -54,11 +54,11 @@
                     <div class="chart-score" id="current-score">--</div>
                 </div>
                 <div class="time-btns">
-                    <button class="time-btn active" onclick="setChartWindow(0)">OFF</button>
-                    <button class="time-btn" onclick="setChartWindow(5)">5m</button>
-                    <button class="time-btn" onclick="setChartWindow(10)">10m</button>
-                    <button class="time-btn" onclick="setChartWindow(15)">15m</button>
-                    <button class="time-btn" onclick="setChartWindow(30)">30m</button>
+                    <button class="time-btn active" onclick="setChartWindow(0, this)">OFF</button>
+                    <button class="time-btn" onclick="setChartWindow(5, this)">5m</button>
+                    <button class="time-btn" onclick="setChartWindow(10, this)">10m</button>
+                    <button class="time-btn" onclick="setChartWindow(15, this)">15m</button>
+                    <button class="time-btn" onclick="setChartWindow(30, this)">30m</button>
                 </div>
             </div>
             <canvas id="chart_canvas" height="120"></canvas>

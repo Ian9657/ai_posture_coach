@@ -5,8 +5,9 @@ Copyright (c) 2026 Ian9657. Code: MIT, see LICENSE.
 Third-party material loaded at runtime (not stored in this repository)
 keeps its own licence:
 
-- MediaPipe Holistic and Camera Utils (@mediapipe/holistic,
-  @mediapipe/camera_utils) by Google, Apache License 2.0. Scripts and
-  model files are fetched from cdn.jsdelivr.net.
+- MediaPipe Tasks Vision (@mediapipe/tasks-vision) by Google, Apache
+  License 2.0, fetched from cdn.jsdelivr.net.
+- Pose Landmarker (lite) model by Google, Apache License 2.0, fetched
+  from storage.googleapis.com/mediapipe-models.
 - Inter and JetBrains Mono fonts via Google Fonts, SIL Open Font
   License 1.1.

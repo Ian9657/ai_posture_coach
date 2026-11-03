@@ -153,13 +153,13 @@ function playAlertSound() {
 }
 
 // --- Drawing ---
-function setupCanvas(image) {
-    if (canvasElement.width !== image.width || canvasElement.height !== image.height) {
-        canvasElement.width = image.width;
-        canvasElement.height = image.height;
+function setupCanvas(width, height) {
+    if (canvasElement.width !== width || canvasElement.height !== height) {
+        canvasElement.width = width;
+        canvasElement.height = height;
         canvasCache.bgGrad = null;
     }
-    const W = canvasElement.width, H = canvasElement.height;
+    const W = width, H = height;
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, W, H);
     canvasCtx.translate(W, 0);
@@ -453,7 +453,7 @@ function onResults(results) {
     frameNow = performance.now();
     frameDt = lastFrameAt ? Math.min(CONFIG.MAX_FRAME_DT_MS, frameNow - lastFrameAt) : 1000 / 30;
     lastFrameAt = frameNow;
-    const { W, H } = setupCanvas(results.image);
+    const { W, H } = setupCanvas(results.width, results.height);
     drawBackground(results.image, W, H);
 
     const lm = results.poseLandmarks;
@@ -468,45 +468,79 @@ function onResults(results) {
     canvasCtx.restore();
 }
 
-if (typeof Holistic === 'undefined') {
-    alert("Script failed to load. Check network.");
+// --- Model and camera ---
+// MediaPipe Tasks Vision, pose only. Versions are pinned; the model path
+// carries its own version (/float16/1/).
+const TASKS_VERSION = '1.1.1';
+const TASKS_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VERSION}`;
+const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+let poseLandmarker = null;
+let lastVideoTime = -1, lastDetectTs = 0;
+
+async function loadModel() {
+    const { FilesetResolver, PoseLandmarker } = await import(`${TASKS_BASE}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${TASKS_BASE}/wasm`);
+    // CPU: ~20 ms a frame for the lite model, and no GPU context to lose
+    // when the tab is in the background.
+    poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: 'CPU' },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+        minPoseDetectionConfidence: 0.5,
+        minPosePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
 }
 
-// Must match the holistic.js version in index.html.
-const HOLISTIC_VERSION = '0.5.1675471629';
-const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@${HOLISTIC_VERSION}/${file}` });
-holistic.setOptions({
-    modelComplexity: 0,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5,
-    refineFaceLandmarks: false
-});
-holistic.onResults(onResults);
+async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false
+    });
+    videoElement.srcObject = stream;
+    await videoElement.play();
+}
+
+// Run the model on the current video frame, if there is a new one.
+function detectFrame() {
+    if (!poseLandmarker || videoElement.readyState < 2) return;
+    if (videoElement.currentTime === lastVideoTime) return;
+    lastVideoTime = videoElement.currentTime;
+    const ts = Math.max(performance.now(), lastDetectTs + 1);  // VIDEO mode needs increasing timestamps
+    lastDetectTs = ts;
+    let result;
+    try {
+        result = poseLandmarker.detectForVideo(videoElement, ts);
+    } catch (e) {
+        console.error("Frame processing error:", e);
+        return;
+    }
+    onResults({
+        image: videoElement,
+        width: videoElement.videoWidth,
+        height: videoElement.videoHeight,
+        poseLandmarks: result.landmarks[0] || null
+    });
+}
+
+function frameLoop() {
+    detectFrame();
+    requestAnimationFrame(frameLoop);
+}
 
 async function startSystem() {
     const overlay = document.getElementById('loading-overlay');
     const loadingText = overlay.querySelector('.loading-text');
 
     try {
-        loadingText.innerText = "Initializing AI Models...";
-        await holistic.initialize();
+        loadingText.innerText = "Loading pose model...";
+        await loadModel();
 
-        loadingText.innerText = "Starting Camera...";
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                try {
-                    await holistic.send({image: videoElement});
-                } catch (e) {
-                    console.error("Frame processing error:", e);
-                }
-            },
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user'
-        });
-        await camera.start().catch(err => {
+        loadingText.innerText = "Starting camera...";
+        await startCamera().catch(err => {
             throw new Error("Camera access denied or failed: " + err.message);
         });
+        frameLoop();
 
         overlay.classList.add('hidden');
         const savedAt = restoreBaseline();

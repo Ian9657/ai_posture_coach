@@ -8,13 +8,26 @@ Status key: **inherited** = came from the original Antigravity build (v2.6.0) an
 
 ## Pipeline
 
-MediaPipe Holistic (`modelComplexity: 0`, detection/tracking confidence 0.5, no refined face landmarks) on a 640×480 front camera. Only pose landmarks are used: nose (0), ears (7, 8) and shoulders (11, 12).
+MediaPipe Tasks Vision `PoseLandmarker`, lite model, CPU delegate, VIDEO mode, confidences 0.5, on a 640×480 front camera. Holistic (v2.6) was replaced because only the face mesh needed it, it is no longer maintained, and on the same machine it took ~250 ms a frame against ~20 ms. Only pose landmarks are used: nose (0), ears (7, 8) and shoulders (11, 12).
 
 A landmark only counts when its `visibility` exceeds **0.85** (`CONFIG.VIS_THRESH`, inherited). Below that the metric shows `BLOCKED` and does not alert, so a hand in front of the face cannot raise an alarm. With no pose at all both metrics read `BLOCKED`.
 
 All metrics are relative to a **calibration baseline**: the median of each raw value over 3 s (`CALIBRATION_MS`) while the user sits upright. Median rather than mean, so a single bad frame does not shift the baseline.
 
 The baseline is saved in `localStorage` (`posture-core.calibration`, format version 1) and restored on the next visit, so the app works without recalibrating (#5). It is saved only when face and shoulders were visible together during calibration; a missing, malformed or other-version entry is ignored. Press C again whenever the camera or chair moves.
+
+## Model comparison (2026-11-03)
+
+Measured in headless Chrome, fake camera fed with a still portrait (Google's `mediapipe-assets/portrait.jpg`) at 640×480, each model calibrated on the upright frame:
+
+| Scene | Holistic (v2.6) | PoseLandmarker lite |
+|---|---|---|
+| upright again | head ratio −1.8% | +0.8% |
+| whole body 15% smaller (sitting back) | **−9.2%** | −1.5% |
+| image rotated 8° | shoulders −0.6° (missed) | −6.9° (alert) |
+| head region enlarged 8% / 15% | +5.9% / +2.5% | 0% / −0.9% |
+
+The last row says the paste-a-bigger-head trick is not a valid forward-lean stand-in for either model; real forward lean still has to be checked on camera (owner saw +9% with Holistic). On distance and tilt the new model is clearly better: with Holistic, sitting back could cancel most of the 8% forward-head threshold.
 
 ## Timing
 
@@ -51,3 +64,4 @@ Everything removed is in tag `v2.6.0`.
 - 2026-11-03: #5. Calibration persists across visits.
 - 2026-11-03: forward-head threshold 1.15 → 1.08. Owner tested: 1.15 was too lenient; leaning to the point that already felt like bad posture read +9%. 1.15 needs roughly 8 cm of forward head at 60 cm from the camera.
 - 2026-11-03: #16. Removed mouth, face rotation, score/chart and decorative text. Calibration saves only head ratio and shoulder angle; v1 saves from v2.6 still load (extra keys ignored).
+- 2026-11-03: Holistic → PoseLandmarker lite (tasks-vision 1.1.1). camera_utils replaced by getUserMedia + own frame loop. See the comparison table.

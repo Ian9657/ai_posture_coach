@@ -430,6 +430,71 @@ function updateMetric(id, val, isAlert, pct) {
     }
 }
 
+// --- Recording (#12) ---
+// R starts/stops; 1-6 mark what you are doing. Saves landmarks only (no
+// image) as JSON for tools/replay.js and test/replay.test.js.
+const REC_LABELS = { 1: 'upright', 2: 'forward', 3: 'look-down', 4: 'turn', 5: 'tilt', 6: 'lean-back' };
+let recording = null;
+
+function toggleRecording() {
+    if (!recording) {
+        recording = {
+            format: 'posture-recording', version: 1,
+            model: 'pose_landmarker_lite/float16/1', tasksVersion: TASKS_VERSION,
+            width: 0, height: 0, startedAt: Date.now(), t0: performance.now(),
+            label: 'upright', frames: [], marks: [{ t: 0, label: 'upright' }]
+        };
+        showToast('Recording. 1 upright · 2 forward · 3 look-down · 4 turn · 5 tilt · 6 lean-back · R to stop', 8000);
+        return;
+    }
+    const rec = recording;
+    recording = null;
+    const { t0, label, ...data } = rec;
+    const stamp = new Date(rec.startedAt).toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `posture-recording-${stamp}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    showToast(`Saved ${rec.frames.length} frames (${Math.round((performance.now() - t0) / 1000)} s).`, 5000);
+}
+
+function markRecording(label) {
+    if (!recording || recording.label === label) return;
+    recording.label = label;
+    recording.marks.push({ t: Math.round(performance.now() - recording.t0), label });
+}
+
+const r4 = v => Math.round(v * 1e4) / 1e4;
+const REC_MIN_INTERVAL_MS = 100;   // <= 10 frames/s: ~3 MB for 5 minutes
+function recordFrame(lm, W, H) {
+    if (!recording) return;
+    const t = Math.round(performance.now() - recording.t0);
+    const prev = recording.frames[recording.frames.length - 1];
+    if (prev && t - prev.t < REC_MIN_INTERVAL_MS) return;
+    recording.width = W; recording.height = H;
+    recording.frames.push({
+        t,
+        lm: lm ? lm.map(p => [r4(p.x), r4(p.y), r4(p.z), r4(p.visibility)]) : null
+    });
+}
+
+function drawRecordingBadge(W) {
+    if (!recording) return;
+    const secs = Math.floor((performance.now() - recording.t0) / 1000);
+    const text = `● REC ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}  ${recording.label}`;
+    canvasCtx.save();
+    canvasCtx.setTransform(1, 0, 0, 1, 0, 0);   // unmirrored, so the text reads normally
+    canvasCtx.font = 'bold 13px JetBrains Mono';
+    const w = canvasCtx.measureText(text).width + 20;
+    canvasCtx.fillStyle = 'rgba(0,0,0,0.65)';
+    canvasCtx.beginPath(); canvasCtx.roundRect(12, 12, w, 26, 6); canvasCtx.fill();
+    canvasCtx.fillStyle = '#ef4444';
+    canvasCtx.fillText(text, 22, 30);
+    canvasCtx.restore();
+}
+
 // --- Frame ---
 function onResults(results) {
     frameNow = performance.now();
@@ -444,7 +509,9 @@ function onResults(results) {
         drawHeatmap(W, H);
     }
     processPosture(lm, W, H);
+    recordFrame(lm, W, H);
     handleCalibration(W, H);
+    drawRecordingBadge(W);
     canvasCtx.restore();
 }
 
@@ -543,5 +610,9 @@ async function startSystem() {
 startSystem();
 
 document.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() === 'c') calibrate();
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === 'c') calibrate();
+    else if (key === 'r') toggleRecording();
+    else if (REC_LABELS[key]) markRecording(REC_LABELS[key]);
 });

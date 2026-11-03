@@ -35,7 +35,8 @@
         return Math.atan2(dy, dx) * (180 / Math.PI);
     }
 
-    // Head yaw proxy in -1..1 from horizontal nose-to-ear distances.
+    // Head yaw proxy in -1..1. Not shown as a metric any more (#16); kept for
+    // correcting the ear span when the head is turned. from horizontal nose-to-ear distances.
     function faceRotation(nose, leftEar, rightEar) {
         const distL = Math.abs(nose.x - leftEar.x);
         const distR = Math.abs(nose.x - rightEar.x);
@@ -49,63 +50,7 @@
                Math.hypot(leftS.x - rightS.x, leftS.y - rightS.y);
     }
 
-    // Lip gap normalised by face height (forehead to chin).
-    function lipDistance(upperLip, lowerLip, forehead, chin) {
-        return Math.abs(lowerLip.y - upperLip.y) / Math.abs(chin.y - forehead.y);
-    }
-
-    // Mouth open/closed with hysteresis: open above 1.14x baseline,
-    // closed again below 1.06x.
-    function mouthHysteresis(lastState, ratio) {
-        if (lastState && ratio < 1.06) return false;
-        if (!lastState && ratio > 1.14) return true;
-        return lastState;
-    }
-
-    function countTransitions(states) {
-        let n = 0;
-        for (let i = 1; i < states.length; i++) if (states[i] !== states[i - 1]) n++;
-        return n;
-    }
-
-    const MOUTH_TIMING = {
-        talkWindowMs: 1000,    // look for open/close flicker in the last second
-        talkTransitions: 3,    // this many changes in the window = talking
-        talkCooldownMs: 1000,  // keep TALKING (and no alert) this long after
-        alertMs: 5000,         // continuous open time before the alert
-        recoveryRate: 5        // closed time drains the open timer 5x faster
-    };
-
-    // Mouth state machine (CLOSED / OPEN / TALKING), driven by real time.
-    // step(now, dtMs, ratio, smoothedOpen): ratio is the raw lip ratio vs
-    // baseline (feeds the hysteresis/flicker detector), smoothedOpen is the
-    // EMA ratio above the open threshold.
-    function createMouthTracker(timing = MOUTH_TIMING) {
-        let history = [], openMs = 0, cooldownMs = 0, state = 'CLOSED';
-        return {
-            reset() { history = []; openMs = 0; cooldownMs = 0; state = 'CLOSED'; },
-            step(now, dtMs, ratio, smoothedOpen) {
-                const last = history.length ? history[history.length - 1].open : false;
-                history.push({ t: now, open: mouthHysteresis(last, ratio) });
-                while (history.length && history[0].t <= now - timing.talkWindowMs) history.shift();
-                const transitions = countTransitions(history.map(h => h.open));
-
-                if (transitions >= timing.talkTransitions) {
-                    state = 'TALKING'; cooldownMs = timing.talkCooldownMs; openMs = 0;
-                } else if (cooldownMs > 0) {
-                    cooldownMs = Math.max(0, cooldownMs - dtMs); openMs = 0;
-                    if (!smoothedOpen && cooldownMs === 0) state = 'CLOSED';
-                } else if (smoothedOpen) {
-                    state = 'OPEN'; openMs += dtMs;
-                } else {
-                    state = 'CLOSED'; openMs = Math.max(0, openMs - timing.recoveryRate * dtMs);
-                }
-                return { state, openMs, alert: openMs > timing.alertMs };
-            }
-        };
-    }
-
-    const BASELINE_KEYS = ['lipDist', 'headRatio', 'shoulderAngle', 'faceRotation'];
+    const BASELINE_KEYS = ['headRatio', 'shoulderAngle'];
     const BASELINE_VERSION = 1;
 
     // Calibration baseline <-> JSON string for localStorage.
@@ -126,54 +71,13 @@
             if (!Number.isFinite(d[k])) return null;
             baseline[k] = d[k];
         }
-        if (baseline.lipDist < 0 || baseline.headRatio < 0) return null;
+        if (baseline.headRatio < 0) return null;
         return { baseline, savedAt: d.savedAt };
     }
 
-    // Zeroed alert counters, one per metric.
-    function freshCounters() {
-        const c = {};
-        for (const key of METRICS) c[key] = 0;
-        return c;
-    }
-
-    // One scoring tick (called once per second). Mutates `consecutive`:
-    // +1 per second in alert (capped at rampSec), -0.5 per second otherwise.
-    // Returns 0..100.
-    function scoreTick(consecutive, alerts, weights, rampSec) {
-        for (const key of METRICS) {
-            const prev = consecutive[key] || 0; // a missing counter counts as 0, never NaN
-            if (alerts[key]) consecutive[key] = Math.min(rampSec, prev + 1);
-            else consecutive[key] = Math.max(0, prev - 0.5);
-        }
-        let totalPenalty = 0;
-        for (const key of METRICS) totalPenalty += weights[key] * (consecutive[key] / rampSec);
-        return Math.round(100 * (1 - totalPenalty));
-    }
-
-    function analyzeSegment(data) {
-        if (!data.length) return null;
-        let sumShoulder = 0, sumRotation = 0, sumScore = 0, fwdCount = 0, mouthCount = 0;
-        for (const d of data) {
-            sumShoulder += Math.abs(d.shoulder);
-            sumRotation += Math.abs(d.rotation);
-            sumScore += d.score;
-            if (d.forwardAlert) fwdCount++;
-            if (d.mouthAlert) mouthCount++;
-        }
-        const len = data.length;
-        return {
-            avgShoulder: sumShoulder / len,
-            avgRotation: sumRotation / len,
-            fwdPct: Math.round((fwdCount / len) * 100),
-            mouthPct: Math.round((mouthCount / len) * 100),
-            avgScore: Math.round(sumScore / len)
-        };
-    }
-
     const PostureCore = {
-        METRICS, MOUTH_TIMING, BASELINE_KEYS, serializeBaseline, parseBaseline, freshCounters, ema, alphaFor, tauFromFrameAlpha, createMouthTracker, median, shoulderAngle, faceRotation, headRatio,
-        lipDistance, mouthHysteresis, countTransitions, scoreTick, analyzeSegment
+        BASELINE_KEYS, ema, alphaFor, tauFromFrameAlpha, median, shoulderAngle,
+        faceRotation, headRatio, serializeBaseline, parseBaseline
     };
 
     if (typeof module !== 'undefined' && module.exports) module.exports = PostureCore;

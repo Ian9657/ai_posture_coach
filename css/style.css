@@ -75,7 +75,6 @@ canvas#output_canvas {
     overflow-y: auto;
 }
 h1 { font-size: clamp(0.9rem, 2vw, 1.1rem); font-weight: 700; color: var(--text-bright); margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; letter-spacing: 1px; opacity: 0.9; }
-h1::after { content: 'LIVE'; font-size: 0.55rem; background: var(--neon-green); color: #000; padding: 2px 6px; border-radius: 4px; font-weight: 800; letter-spacing: 0.5px; box-shadow: 0 0 15px var(--neon-green-glow); flex-shrink: 0; }
 
 .metric { 
     background: rgba(255,255,255,0.02); 
@@ -154,46 +153,7 @@ h1::after { content: 'LIVE'; font-size: 0.55rem; background: var(--neon-green); 
 }
 .btn:active { transform: translateY(-1px); }
 
-/* Chart Section */
-.chart-section { 
-    background: rgba(255,255,255,0.02); 
-    padding: 12px; 
-    border-radius: 14px;
-    border: 1px solid var(--glass-border); 
-    margin-top: 4px;
-    backdrop-filter: blur(5px);
-}
-.chart-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
-.chart-title { font-size: 0.6rem; color: var(--text); text-transform: uppercase; font-weight: 600; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
-.chart-score { font-family: 'JetBrains Mono', monospace; font-size: clamp(1.4rem, 3vw, 1.75rem); font-weight: 800; color: var(--neon-green); text-shadow: 0 0 20px var(--neon-green-glow); line-height: 1; transition: all 0.5s var(--elastic); }
-.time-btns { display: flex; flex-wrap: nowrap; gap: 2px; background: rgba(0,0,0,0.4); padding: 4px; border-radius: 8px; border: 1px solid var(--glass-border); }
-.time-btn { 
-    background: transparent; 
-    border: none; 
-    color: var(--text); 
-    padding: 4px 6px; 
-    border-radius: 6px;
-    cursor: pointer; 
-    font-family: 'Inter', sans-serif; 
-    font-weight: 700;
-    font-size: 0.55rem; 
-    transition: all 0.3s; 
-}
-.time-btn.active { background: rgba(255,255,255,0.1); color: var(--text-bright); box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
-.time-btn:hover:not(.active) { color: var(--text-bright); background: rgba(255,255,255,0.05); }
-canvas#chart_canvas { width: 100%; height: 90px; display: block; }
 
-.footer-info {
-    margin-top: auto; 
-    font-size: 0.55rem; 
-    color: rgba(255,255,255,0.2); 
-    line-height: 1.5;
-    font-family: 'JetBrains Mono', monospace;
-    padding-top: 12px;
-    border-top: 1px solid var(--glass-border);
-    flex-shrink: 0;
-    letter-spacing: 0.5px;
-}
 
 /* Responsive Layout */
 @media (max-width: 1400px) {

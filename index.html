@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>POSTURE CORE v2.6.0</title>
+    <title>Posture Core</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/holistic.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="css/style.css">
@@ -21,17 +21,11 @@
         </div>
     </div>
     <div id="sidebar">
-        <h1>POSTURE_CORE_v2.6.0</h1>
+        <h1>POSTURE_CORE</h1>
         
         <div class="metric" id="m-shoulder">
             <div class="label">Shoulders</div>
             <div class="value">0.00°</div>
-            <div class="gauge-bg"><div class="gauge-fill"></div></div>
-        </div>
-
-        <div class="metric" id="m-rotation">
-            <div class="label">Face Rotation</div>
-            <div class="value">0.00</div>
             <div class="gauge-bg"><div class="gauge-fill"></div></div>
         </div>
 
@@ -41,39 +35,11 @@
             <div class="gauge-bg"><div class="gauge-fill"></div></div>
         </div>
 
-        <div class="metric" id="m-jaw">
-            <div class="label">Mouth Breathing</div>
-            <div class="value">CLOSED</div>
-        </div>
-
-        <!-- Posture Score Chart -->
-        <div class="chart-section">
-            <div class="chart-header">
-                <div>
-                    <div class="chart-title">Posture Score</div>
-                    <div class="chart-score" id="current-score">--</div>
-                </div>
-                <div class="time-btns">
-                    <button class="time-btn active" onclick="setChartWindow(0, this)">OFF</button>
-                    <button class="time-btn" onclick="setChartWindow(5, this)">5m</button>
-                    <button class="time-btn" onclick="setChartWindow(10, this)">10m</button>
-                    <button class="time-btn" onclick="setChartWindow(15, this)">15m</button>
-                    <button class="time-btn" onclick="setChartWindow(30, this)">30m</button>
-                </div>
-            </div>
-            <canvas id="chart_canvas" height="120"></canvas>
-        </div>
-
         <div style="display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap;">
             <button class="btn" id="calibrate-btn" style="flex: 2; min-width: 120px;" onclick="calibrate()">Calibration (C)</button>
             <button class="btn" id="zen-btn" style="flex: 1; min-width: 90px; padding: 14px 0;" onclick="toggleZen()">Zen Mode</button>
         </div>
         <button class="btn" id="pip-btn" style="width: 100%;" onclick="togglePiP()">PIP</button>
-        
-        <div class="footer-info">
-            WEIGHTS: S25 R25 F30 M20<br>
-            RAMP: 30s ACCEL CURVE
-        </div>
     </div>
     <script src="js/core.js"></script>
     <script src="js/app.js"></script>

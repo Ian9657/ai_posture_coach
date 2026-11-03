@@ -22,6 +22,16 @@ const { ema, median, shoulderAngle, faceRotation, headRatio, lipDistance,
 
 const CALIBRATION_STORE_KEY = 'posture-core.calibration';
 
+// Status colours come from css/style.css (:root) so page and canvas match.
+const rootStyle = getComputedStyle(document.documentElement);
+const cssVar = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
+const GREEN_RGB = cssVar('--green-rgb', '16, 185, 129');
+const ACCENT_RGB = cssVar('--accent-rgb', '249, 115, 22');
+const GREEN = `rgb(${GREEN_RGB})`, ACCENT = `rgb(${ACCENT_RGB})`, DANGER = cssVar('--danger', '#ef4444');
+const green = a => `rgba(${GREEN_RGB}, ${a})`;
+const accent = a => `rgba(${ACCENT_RGB}, ${a})`;
+const scoreColor = score => score >= 70 ? GREEN : score >= 40 ? ACCENT : DANGER;
+
 const videoElement = document.getElementById('input_video');
 const canvasElement = document.getElementById('output_canvas');
 const canvasCtx = canvasElement.getContext('2d');
@@ -60,9 +70,9 @@ function showToast(msg, duration = 3000) {
 function toggleZen() {
     isZenMode = !isZenMode;
     const b = document.getElementById('zen-btn');
-    b.style.background = isZenMode ? 'rgba(34, 197, 94, 0.15)' : '';
+    b.style.background = isZenMode ? green(0.15) : '';
     b.style.color = isZenMode ? 'var(--neon-green)' : '';
-    b.style.borderColor = isZenMode ? 'rgba(34, 197, 94, 0.3)' : '';
+    b.style.borderColor = isZenMode ? green(0.3) : '';
     b.innerText = isZenMode ? 'Zen: ON' : 'Zen Mode';
 }
 
@@ -98,8 +108,8 @@ async function togglePiP() {
                 const btn = document.getElementById('pip-btn');
                 btn.innerText = 'CLOSE PIP';
                 btn.style.color = 'var(--neon-green)';
-                btn.style.borderColor = 'rgba(34, 197, 94, 0.3)';
-                btn.style.background = 'rgba(34, 197, 94, 0.15)';
+                btn.style.borderColor = green(0.3);
+                btn.style.background = green(0.15);
             });
             pipVideo.addEventListener('leavepictureinpicture', () => {
                 const btn = document.getElementById('pip-btn');
@@ -277,7 +287,7 @@ function drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra,
         canvasCtx.moveTo(leftS.x * W, leftS.y * H);
         canvasCtx.lineTo(rightS.x * W, rightS.y * H);
         canvasCtx.lineWidth = 4;
-        canvasCtx.strokeStyle = alertStates.shoulder ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
+        canvasCtx.strokeStyle = alertStates.shoulder ? accent(0.9) : green(0.4);
         canvasCtx.stroke();
     }
 
@@ -289,7 +299,7 @@ function drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra,
         canvasCtx.moveTo(nose.x * W, nose.y * H);
         canvasCtx.lineTo(faceCenterX, faceCenterY);
         canvasCtx.lineWidth = 3;
-        canvasCtx.strokeStyle = alertStates.rotation ? 'rgba(249, 115, 22, 0.9)' : 'rgba(34, 197, 94, 0.4)';
+        canvasCtx.strokeStyle = alertStates.rotation ? accent(0.9) : green(0.4);
         canvasCtx.stroke();
     }
 
@@ -301,7 +311,7 @@ function drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra,
         canvasCtx.beginPath();
         canvasCtx.roundRect(-24, -14, 48, 20, 6);
         canvasCtx.fill();
-        canvasCtx.fillStyle = isAlert ? '#f97316' : '#22c55e';
+        canvasCtx.fillStyle = isAlert ? ACCENT : GREEN;
         canvasCtx.font = 'bold 10px JetBrains Mono';
         canvasCtx.textAlign = 'center';
         canvasCtx.fillText(text, 0, 0);
@@ -342,7 +352,7 @@ function processMouth(results, W, H, poseMouthUnoccluded) {
         updateMetric('m-jaw', isVisible ? "NO CALIB" : "BLOCKED", false);
     }
     
-    canvasCtx.fillStyle = '#f97316';
+    canvasCtx.fillStyle = ACCENT;
     [face[13], face[14]].forEach(p => {
         canvasCtx.beginPath();
         canvasCtx.arc(p.x * W, p.y * H, 3, 0, 2 * Math.PI);
@@ -400,7 +410,7 @@ function handleCalibration(results, W, H) {
         canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
         canvasCtx.fillRect(-W/2, -H/2, W, H);
         canvasCtx.scale(-1, 1);
-        canvasCtx.fillStyle = '#f97316';
+        canvasCtx.fillStyle = ACCENT;
         canvasCtx.font = 'bold 24px Inter';
         canvasCtx.textAlign = 'center';
         canvasCtx.fillText(`Calibrating... Keep still (${timeLeft}s)`, 0, 0);
@@ -423,7 +433,7 @@ function handleCalibration(results, W, H) {
         
         const btn = document.getElementById('calibrate-btn');
         const sidebar = document.getElementById('sidebar');
-        if (sidebar) sidebar.style.background = 'rgba(34, 197, 94, 0.1)';
+        if (sidebar) sidebar.style.background = green(0.1);
         if (btn) {
             btn.innerText = "CALIBRATED ✓";
             btn.style.color = 'var(--neon-green)';
@@ -455,7 +465,7 @@ function updateAppScore() {
         
         const el = document.getElementById('current-score');
         el.innerText = currentScore;
-        el.style.color = currentScore >= 70 ? '#22c55e' : currentScore >= 40 ? '#f97316' : '#ef4444';
+        el.style.color = scoreColor(currentScore);
         if (currentScore < 40) playAlertSound();
         drawChart();
     }
@@ -479,7 +489,7 @@ function drawHeatmap(W, H) {
     if (!isZenMode || heatHistory.length < 5) return;
     
     const hasAlert = alertStates.shoulder || alertStates.rotation || alertStates.forward || alertStates.mouth;
-    const color = hasAlert ? '249, 115, 22' : '16, 185, 129';
+    const color = hasAlert ? ACCENT_RGB : GREEN_RGB;
     
     canvasCtx.save();
     canvasCtx.globalCompositeOperation = 'screen';
@@ -555,7 +565,7 @@ function setChartWindow(min, btn) {
     scoreHistory.length = 0;
     consecutiveAlert = freshCounters();
     document.getElementById('current-score').innerText = min === 0 ? '--' : '100';
-    document.getElementById('current-score').style.color = '#22c55e';
+    document.getElementById('current-score').style.color = GREEN;
     
     drawChart();
 }
@@ -616,7 +626,7 @@ function drawChart() {
         if (data[i].score < 70) {
             const x = ((data[i].t - windowStart) / windowMs) * W;
             const prevX = ((data[i - 1].t - windowStart) / windowMs) * W;
-            chartCtx.fillStyle = 'rgba(249, 115, 22, 0.06)';
+            chartCtx.fillStyle = accent(0.06);
             chartCtx.fillRect(prevX, chartTop, x - prevX, chartH);
         }
     }
@@ -629,14 +639,14 @@ function drawChart() {
         if (i === 0) chartCtx.moveTo(x, y);
         else chartCtx.lineTo(x, y);
     }
-    chartCtx.strokeStyle = '#22c55e';
+    chartCtx.strokeStyle = GREEN;
     chartCtx.lineWidth = 1.5;
     chartCtx.stroke();
 
     // Gradient fill
     const grad = chartCtx.createLinearGradient(0, chartTop, 0, chartTop + chartH);
-    grad.addColorStop(0, 'rgba(34, 197, 94, 0.12)');
-    grad.addColorStop(1, 'rgba(34, 197, 94, 0)');
+    grad.addColorStop(0, green(0.12));
+    grad.addColorStop(1, green(0));
     chartCtx.lineTo(((data[data.length - 1].t - windowStart) / windowMs) * W, chartTop + chartH);
     chartCtx.lineTo(((data[0].t - windowStart) / windowMs) * W, chartTop + chartH);
     chartCtx.closePath();
@@ -670,7 +680,7 @@ function drawChart() {
         if (!seg || segments[i].length < 2) continue;
         const xStart = (i / 5) * W + 2;
         const y = chartTop + chartH + 10;
-        const color = seg.avgScore >= 70 ? '#22c55e' : seg.avgScore >= 40 ? '#f97316' : '#ef4444';
+        const color = scoreColor(seg.avgScore);
         chartCtx.fillStyle = '#444';
         chartCtx.fillText('S' + seg.avgShoulder.toFixed(0) + '° R' + seg.avgRotation.toFixed(2), xStart, y);
         chartCtx.fillStyle = color;
@@ -702,10 +712,8 @@ function updateMetric(id, val, isAlert, pct) {
     if (cache.lastAlert !== isAlert) {
         if (isAlert) {
             cache.el.classList.add('alert');
-            cache.valueEl.style.color = '#f97316';
         } else {
             cache.el.classList.remove('alert');
-            cache.valueEl.style.color = '#22c55e';
         }
         cache.lastAlert = isAlert;
     }
@@ -733,8 +741,8 @@ function calibrate() {
     const btn = document.getElementById('calibrate-btn');
     if (btn) {
         btn.innerText = "CALIBRATING (3s)...";
-        btn.style.color = '#f97316';
-        btn.style.borderColor = '#f97316';
+        btn.style.color = ACCENT;
+        btn.style.borderColor = ACCENT;
     }
 }
 
@@ -797,7 +805,7 @@ async function startSystem() {
     } catch (err) {
         console.error("Initialization failed:", err);
         loadingText.innerHTML = `
-            <div style="color: #f97316; margin-bottom: 10px;">INITIALIZATION FAILED</div>
+            <div style="color: var(--accent); margin-bottom: 10px;">INITIALIZATION FAILED</div>
             <div style="font-size: 0.65rem; text-transform: none; margin-bottom: 20px; color: #a1a1aa; max-width: 250px;">${err.message}</div>
             <button class="btn" onclick="location.reload()" style="padding: 10px 20px;">RETRY</button>
         `;

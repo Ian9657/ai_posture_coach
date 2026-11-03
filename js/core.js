@@ -9,6 +9,18 @@
         return value * alpha + prev * (1 - alpha);
     }
 
+    // EMA weight for a step of dtMs with time constant tauMs. Makes smoothing
+    // independent of frame rate: at 30 fps it equals the per-frame alpha
+    // the time constant was derived from (see tauFromFrameAlpha).
+    function alphaFor(dtMs, tauMs) {
+        return 1 - Math.exp(-dtMs / tauMs);
+    }
+
+    // Time constant (ms) of a per-frame EMA alpha at a given frame rate.
+    function tauFromFrameAlpha(alpha, fps) {
+        return (1000 / fps) / -Math.log(1 - alpha);
+    }
+
     // Upper median (index floor(n/2) of the sorted copy); 0 for an empty list.
     function median(arr) {
         const s = [...arr].sort((a, b) => a - b);
@@ -56,6 +68,43 @@
         return n;
     }
 
+    const MOUTH_TIMING = {
+        talkWindowMs: 1000,    // look for open/close flicker in the last second
+        talkTransitions: 3,    // this many changes in the window = talking
+        talkCooldownMs: 1000,  // keep TALKING (and no alert) this long after
+        alertMs: 5000,         // continuous open time before the alert
+        recoveryRate: 5        // closed time drains the open timer 5x faster
+    };
+
+    // Mouth state machine (CLOSED / OPEN / TALKING), driven by real time.
+    // step(now, dtMs, ratio, smoothedOpen): ratio is the raw lip ratio vs
+    // baseline (feeds the hysteresis/flicker detector), smoothedOpen is the
+    // EMA ratio above the open threshold.
+    function createMouthTracker(timing = MOUTH_TIMING) {
+        let history = [], openMs = 0, cooldownMs = 0, state = 'CLOSED';
+        return {
+            reset() { history = []; openMs = 0; cooldownMs = 0; state = 'CLOSED'; },
+            step(now, dtMs, ratio, smoothedOpen) {
+                const last = history.length ? history[history.length - 1].open : false;
+                history.push({ t: now, open: mouthHysteresis(last, ratio) });
+                while (history.length && history[0].t <= now - timing.talkWindowMs) history.shift();
+                const transitions = countTransitions(history.map(h => h.open));
+
+                if (transitions >= timing.talkTransitions) {
+                    state = 'TALKING'; cooldownMs = timing.talkCooldownMs; openMs = 0;
+                } else if (cooldownMs > 0) {
+                    cooldownMs = Math.max(0, cooldownMs - dtMs); openMs = 0;
+                    if (!smoothedOpen && cooldownMs === 0) state = 'CLOSED';
+                } else if (smoothedOpen) {
+                    state = 'OPEN'; openMs += dtMs;
+                } else {
+                    state = 'CLOSED'; openMs = Math.max(0, openMs - timing.recoveryRate * dtMs);
+                }
+                return { state, openMs, alert: openMs > timing.alertMs };
+            }
+        };
+    }
+
     // Zeroed alert counters, one per metric.
     function freshCounters() {
         const c = {};
@@ -98,7 +147,7 @@
     }
 
     const PostureCore = {
-        METRICS, freshCounters, ema, median, shoulderAngle, faceRotation, headRatio,
+        METRICS, MOUTH_TIMING, freshCounters, ema, alphaFor, tauFromFrameAlpha, createMouthTracker, median, shoulderAngle, faceRotation, headRatio,
         lipDistance, mouthHysteresis, countTransitions, scoreTick, analyzeSegment
     };
 

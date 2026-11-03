@@ -1,7 +1,9 @@
 const CONFIG = {
     VIS_THRESH: 0.85,
-    EMA_ALPHA: 0.15,
-    SHOULDER_ALPHA: 0.10,
+    // Smoothing time constants. v2.6.0 used per-frame alphas 0.15 / 0.10 at
+    // 30 fps; these are the same smoothing expressed in milliseconds.
+    SMOOTH_TAU_MS: 205,
+    SHOULDER_TAU_MS: 316,
     THRESHOLDS: {
         shoulder: 4.5,
         rotation: 0.20,
@@ -9,12 +11,13 @@ const CONFIG = {
         mouth: 1.12
     },
     RAMP_SEC: 30,
-    MAX_HISTORY_SEC: 30 * 60,
-    CALIBRATION_FRAMES: 90
+    CALIBRATION_MS: 3000,
+    HEAT_WINDOW_MS: 5000,
+    MAX_FRAME_DT_MS: 1000   // cap one frame's step after a stall or a hidden tab
 };
 
 const { ema, median, shoulderAngle, faceRotation, headRatio, lipDistance,
-        mouthHysteresis, countTransitions, freshCounters, scoreTick, analyzeSegment } = PostureCore;
+        freshCounters, scoreTick, analyzeSegment, alphaFor, createMouthTracker } = PostureCore;
 
 const videoElement = document.getElementById('input_video');
 const canvasElement = document.getElementById('output_canvas');
@@ -23,12 +26,10 @@ const canvasCtx = canvasElement.getContext('2d');
 let baselineLipDist = 0, lastLipDist = 0;
 let baselineHeadRatio = 0, lastHeadRatio = 0, smoothHeadRatio = 0;
 let smoothShoulderAngle = 0, smoothFaceRotation = 0, smoothLipDist = 0;
-let mouthOpenFrames = 0;
-let mouthStateHistory = [];
-let currentJawState = "CLOSED";
-let talkingCooldown = 0;
+const mouthTracker = createMouthTracker();
+let frameNow = 0, frameDt = 1000 / 30, lastFrameAt = 0;
+let calibrationStartedAt = 0;
 let isCalibrating = false;
-let calibrationFrames = 0;
 let calibrationData = { lipDist: [], headRatio: [], shoulderAngle: [], faceRotation: [] };
 let baselineShoulderAngle = 0;
 let baselineFaceRotation = 0;
@@ -114,11 +115,9 @@ async function togglePiP() {
     }
 }
 
-const EMA_ALPHA = 0.15;
 
 // --- Cumulative Scoring ---
 const WEIGHTS = { shoulder: 0.25, rotation: 0.25, forward: 0.3, mouth: 0.2 };
-const RAMP_SEC = 30; // seconds to reach full penalty
 let consecutiveAlert = freshCounters();
 let alertStates = { shoulder: false, rotation: false, forward: false, mouth: false };
 
@@ -212,10 +211,10 @@ function processPosture(results, W, H) {
     
     if (shoulderVisible) {
         const rawAngle = shoulderAngle(leftS, rightS, W, H);
-        if (isCalibrating && calibrationFrames < CONFIG.CALIBRATION_FRAMES) calibrationData.shoulderAngle.push(rawAngle);
+        if (calibrationCollecting()) calibrationData.shoulderAngle.push(rawAngle);
         
         const corrected = rawAngle - baselineShoulderAngle;
-        smoothShoulderAngle = ema(smoothShoulderAngle, corrected, CONFIG.SHOULDER_ALPHA);
+        smoothShoulderAngle = ema(smoothShoulderAngle, corrected, alphaFor(frameDt, CONFIG.SHOULDER_TAU_MS));
         alertStates.shoulder = Math.abs(smoothShoulderAngle) > CONFIG.THRESHOLDS.shoulder;
         updateMetric('m-shoulder', smoothShoulderAngle.toFixed(2) + "°", alertStates.shoulder, Math.abs(smoothShoulderAngle) / 8 * 100);
     } else {
@@ -225,10 +224,10 @@ function processPosture(results, W, H) {
     
     if (faceVisible) {
         let rawRotation = faceRotation(nose, leftEar, rightEar);
-        if (isCalibrating && calibrationFrames < CONFIG.CALIBRATION_FRAMES) calibrationData.faceRotation.push(rawRotation);
+        if (calibrationCollecting()) calibrationData.faceRotation.push(rawRotation);
         
         rawRotation -= baselineFaceRotation;
-        smoothFaceRotation = ema(smoothFaceRotation, rawRotation, CONFIG.EMA_ALPHA);
+        smoothFaceRotation = ema(smoothFaceRotation, rawRotation, alphaFor(frameDt, CONFIG.SMOOTH_TAU_MS));
         alertStates.rotation = Math.abs(smoothFaceRotation) > CONFIG.THRESHOLDS.rotation;
         updateMetric('m-rotation', (smoothFaceRotation > 0 ? "R " : "L ") + Math.abs(smoothFaceRotation).toFixed(2), alertStates.rotation, Math.abs(smoothFaceRotation) / 0.4 * 100);
     } else {
@@ -240,7 +239,7 @@ function processPosture(results, W, H) {
     if (faceVisible && shoulderVisible) {
         lastHeadRatio = headRatio(leftEar, rightEar, leftS, rightS);
         if (baselineHeadRatio > 0) {
-            smoothHeadRatio = ema(smoothHeadRatio, lastHeadRatio, CONFIG.EMA_ALPHA);
+            smoothHeadRatio = ema(smoothHeadRatio, lastHeadRatio, alphaFor(frameDt, CONFIG.SMOOTH_TAU_MS));
             const forwardRatio = smoothHeadRatio / baselineHeadRatio;
             alertStates.forward = forwardRatio > CONFIG.THRESHOLDS.forward;
             fwdExtra = Math.round((forwardRatio-1)*100);
@@ -302,7 +301,7 @@ function drawHUDOverlays(W, H, leftS, rightS, nose, leftEar, rightEar, fwdExtra,
 
 function processMouth(results, W, H, poseMouthUnoccluded) {
     if (!results.faceLandmarks) {
-        mouthStateHistory.length = 0; mouthOpenFrames = 0; currentJawState = "CLOSED"; talkingCooldown = 0;
+        mouthTracker.reset();
         alertStates.mouth = false; updateMetric('m-jaw', "NO FACE", false);
         return;
     }
@@ -313,34 +312,16 @@ function processMouth(results, W, H, poseMouthUnoccluded) {
 
     if (baselineLipDist > 0 && isVisible) {
         const ratio = lastLipDist / baselineLipDist;
-        let lastState = mouthStateHistory.length > 0 ? mouthStateHistory[mouthStateHistory.length - 1] : false;
-        const currentRawState = mouthHysteresis(lastState, ratio);
-        
-        mouthStateHistory.push(currentRawState);
-        if (mouthStateHistory.length > 30) mouthStateHistory.shift();
-        
-        const transitions = countTransitions(mouthStateHistory);
-        
-        smoothLipDist = ema(smoothLipDist, lastLipDist, CONFIG.EMA_ALPHA);
+        smoothLipDist = ema(smoothLipDist, lastLipDist, alphaFor(frameDt, CONFIG.SMOOTH_TAU_MS));
         const smoothedMouthOpen = (smoothLipDist / baselineLipDist) > CONFIG.THRESHOLDS.mouth;
-        
-        if (transitions >= 3) {
-            currentJawState = "TALKING"; talkingCooldown = 30; mouthOpenFrames = 0;
-        } else if (talkingCooldown > 0) {
-            talkingCooldown--; mouthOpenFrames = 0;
-            if (!smoothedMouthOpen && talkingCooldown === 0) currentJawState = "CLOSED";
-        } else if (smoothedMouthOpen) {
-            currentJawState = "OPEN"; mouthOpenFrames++;
-        } else {
-            currentJawState = "CLOSED"; mouthOpenFrames = Math.max(0, mouthOpenFrames - 5);
-        }
-        
-        alertStates.mouth = mouthOpenFrames > 150;
-        if (currentJawState === "TALKING") updateMetric('m-jaw', "TALKING", false);
-        else if (currentJawState === "OPEN") updateMetric('m-jaw', "OPEN " + Math.floor(mouthOpenFrames / 30) + "s", alertStates.mouth);
+        const mouth = mouthTracker.step(frameNow, frameDt, ratio, smoothedMouthOpen);
+
+        alertStates.mouth = mouth.alert;
+        if (mouth.state === "TALKING") updateMetric('m-jaw', "TALKING", false);
+        else if (mouth.state === "OPEN") updateMetric('m-jaw', "OPEN " + Math.floor(mouth.openMs / 1000) + "s", alertStates.mouth);
         else updateMetric('m-jaw', "CLOSED", false);
     } else {
-        mouthStateHistory.length = 0; mouthOpenFrames = 0; currentJawState = "CLOSED";
+        mouthTracker.reset();
         updateMetric('m-jaw', isVisible ? "NO CALIB" : "BLOCKED", false);
     }
     
@@ -352,14 +333,17 @@ function processMouth(results, W, H, poseMouthUnoccluded) {
     });
 }
 
+function calibrationCollecting() {
+    return isCalibrating && frameNow - calibrationStartedAt < CONFIG.CALIBRATION_MS;
+}
+
 function handleCalibration(results, W, H) {
     if (!isCalibrating) return;
-    if (calibrationFrames < CONFIG.CALIBRATION_FRAMES) {
+    if (calibrationCollecting()) {
         if (lastLipDist > 0) calibrationData.lipDist.push(lastLipDist);
         if (lastHeadRatio > 0) calibrationData.headRatio.push(lastHeadRatio);
-        calibrationFrames++;
-        
-        const timeLeft = Math.ceil((CONFIG.CALIBRATION_FRAMES - calibrationFrames) / 30);
+
+        const timeLeft = Math.max(1, Math.ceil((CONFIG.CALIBRATION_MS - (frameNow - calibrationStartedAt)) / 1000));
         const btn = document.getElementById('calibrate-btn');
         if (btn) btn.innerText = `CALIBRATING (${timeLeft}s)...`;
         
@@ -386,8 +370,7 @@ function handleCalibration(results, W, H) {
         baselineFaceRotation = median(calibrationData.faceRotation);
         smoothFaceRotation = 0;
         
-        mouthOpenFrames = 0;
-        mouthStateHistory.length = 0;
+        mouthTracker.reset();
         consecutiveAlert = freshCounters();
         scoreHistory.length = 0;
         lastSampleTime = Date.now();
@@ -433,7 +416,6 @@ function updateAppScore() {
 }
 
 const heatHistory = [];
-const MAX_HEAT_HISTORY = 150; // ~5 seconds at 30fps
 
 function updateHeatmap(nose, leftS, rightS) {
     if (!nose || !leftS || !rightS) return;
@@ -443,7 +425,8 @@ function updateHeatmap(nose, leftS, rightS) {
         rightS: { x: rightS.x, y: rightS.y },
         time: Date.now()
     });
-    if (heatHistory.length > MAX_HEAT_HISTORY) heatHistory.shift();
+    const cutoff = Date.now() - CONFIG.HEAT_WINDOW_MS;
+    while (heatHistory.length && heatHistory[0].time < cutoff) heatHistory.shift();
 }
 
 function drawHeatmap(W, H) {
@@ -493,6 +476,9 @@ function drawHeatmap(W, H) {
 }
 
 function onResults(results) {
+    frameNow = performance.now();
+    frameDt = lastFrameAt ? Math.min(CONFIG.MAX_FRAME_DT_MS, frameNow - lastFrameAt) : 1000 / 30;
+    lastFrameAt = frameNow;
     const { W, H } = setupCanvas(results);
     handleZenMode(results, W, H);
     
@@ -695,7 +681,7 @@ function updateMetric(id, val, isAlert, pct) {
 function calibrate() {
     if (isCalibrating) return;
     isCalibrating = true;
-    calibrationFrames = 0;
+    calibrationStartedAt = performance.now();
     calibrationData = { lipDist: [], headRatio: [], shoulderAngle: [], faceRotation: [] };
     
     const btn = document.getElementById('calibrate-btn');

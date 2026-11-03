@@ -114,3 +114,69 @@ test('scoreTick never returns NaN when a counter is missing (#13)', () => {
     assert.equal(cons.forward, 1);
     assert.equal(score, Math.round(100 * (1 - 0.3 / 30)));
 });
+
+test('alphaFor matches the v2.6.0 per-frame alphas at 30 fps (#14)', () => {
+    // CONFIG.SMOOTH_TAU_MS = 205 and SHOULDER_TAU_MS = 316 in js/app.js
+    assert.equal(Math.round(C.tauFromFrameAlpha(0.15, 30)), 205);
+    assert.equal(Math.round(C.tauFromFrameAlpha(0.10, 30)), 316);
+    close(C.alphaFor(1000 / 30, 205), 0.15, 0.001);
+    close(C.alphaFor(1000 / 30, 316), 0.10, 0.001);
+});
+
+test('time-based EMA settles at the same time whatever the frame rate (#14)', () => {
+    const settle = fps => {
+        let v = 0, t = 0;
+        const dt = 1000 / fps;
+        while (v < 0.95) { v = C.ema(v, 1, C.alphaFor(dt, 205)); t += dt; }
+        return t;
+    };
+    const t30 = settle(30), t3 = settle(3);
+    assert.ok(Math.abs(t30 - 614) < 40, `30 fps: ${t30}`);   // ~3 tau
+    assert.ok(t3 < 1000, `3 fps: ${t3}`);                    // per-frame 0.15 would take ~6 s
+});
+
+// Drive a tracker for durationMs at fps; f(t) gives [ratio, smoothedOpen].
+function runMouth(fps, durationMs, f, tracker = C.createMouthTracker()) {
+    const dt = 1000 / fps;
+    let out, t = 0;
+    for (; t < durationMs; t += dt) { const [r, o] = f(t); out = tracker.step(t, dt, r, o); }
+    return out;
+}
+
+test('mouth alert fires after ~5 s open at 30 fps and at 10 fps (#14)', () => {
+    for (const fps of [30, 10]) {
+        assert.equal(runMouth(fps, 4800, () => [1.3, true]).alert, false, `${fps} fps at 4.8 s`);
+        const r = runMouth(fps, 5300, () => [1.3, true]);
+        assert.equal(r.alert, true, `${fps} fps at 5.3 s`);
+        assert.equal(r.state, 'OPEN');
+    }
+});
+
+test('closed time drains the open timer 5x faster', () => {
+    const tr = C.createMouthTracker();
+    runMouth(30, 4000, () => [1.3, true], tr);
+    // 0.5 s closed removes 2.5 s; only one hysteresis change, so not talking
+    const dt = 1000 / 30;
+    let r;
+    for (let t = 4000; t < 4500; t += dt) r = tr.step(t, dt, 1.0, false);
+    assert.equal(r.state, 'CLOSED');
+    assert.ok(Math.abs(r.openMs - 1500) < 200, `${r.openMs}`); // ±1 frame of float drift
+});
+
+test('fast open/close flicker reads as TALKING and never alerts', () => {
+    for (const fps of [30, 10]) {
+        // mouth toggles every 200 ms for 8 s
+        const r = runMouth(fps, 8000, t => Math.floor(t / 200) % 2 ? [1.3, true] : [1.0, false]);
+        assert.equal(r.state, 'TALKING', `${fps} fps`);
+        assert.equal(r.alert, false);
+    }
+});
+
+test('reset clears the tracker', () => {
+    const tr = C.createMouthTracker();
+    runMouth(30, 6000, () => [1.3, true], tr);
+    tr.reset();
+    const r = tr.step(0, 33, 1.0, false);
+    assert.equal(r.openMs, 0);
+    assert.equal(r.state, 'CLOSED');
+});

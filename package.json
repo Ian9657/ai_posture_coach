@@ -3,6 +3,7 @@
   "version": "2.6.0",
   "private": true,
   "description": "In-browser webcam posture monitor built on MediaPipe Holistic. The site has no build step; npm scripts are dev tooling.",
+  "license": "MIT",
   "author": "Ian9657",
   "repository": {
     "type": "git",

@@ -1,20 +1,13 @@
+// Posture thresholds, hysteresis and hold time live in core.DEFAULT_MONITOR
+// (see docs/DECISIONS.md). This is page-level timing only.
 const CONFIG = {
-    VIS_THRESH: 0.85,
-    // Smoothing time constants. v2.6.0 used per-frame alphas 0.15 / 0.10 at
-    // 30 fps; these are the same smoothing expressed in milliseconds.
-    SMOOTH_TAU_MS: 205,
-    SHOULDER_TAU_MS: 316,
-    THRESHOLDS: {
-        shoulder: 4.5,
-        forward: 1.08   // owner: +9% already feels like bad posture (2026-11-03)
-    },
     CALIBRATION_MS: 3000,
     HEAT_WINDOW_MS: 5000,
     MAX_FRAME_DT_MS: 1000   // cap one frame's step after a stall or a hidden tab
 };
 
-const { ema, median, shoulderAngle, headRatio, alphaFor,
-        serializeBaseline, parseBaseline } = PostureCore;
+const { median, createPostureMonitor, serializeBaseline, parseBaseline } = PostureCore;
+const monitor = createPostureMonitor();
 
 const CALIBRATION_STORE_KEY = 'posture-core.calibration';
 
@@ -31,13 +24,13 @@ const videoElement = document.getElementById('input_video');
 const canvasElement = document.getElementById('output_canvas');
 const canvasCtx = canvasElement.getContext('2d');
 
-let baselineHeadRatio = 0, lastHeadRatio = 0, smoothHeadRatio = 0;
-let baselineShoulderAngle = 0, smoothShoulderAngle = 0;
+let lastPosture = null;   // latest monitor.step() result
 let frameNow = 0, frameDt = 1000 / 30, lastFrameAt = 0;
 let isCalibrating = false, calibrationStartedAt = 0;
 let calibrationData = { headRatio: [], shoulderAngle: [] };
 let isZenMode = false;
-const alertStates = { shoulder: false, forward: false };
+const alertStates = { shoulder: false, forward: false };   // drawn orange: over threshold
+let sustainedAlert = false;                                  // held past holdMs
 
 const domCache = {};
 const canvasCache = { bgGrad: null, gridGrad: null, gridPath: null };
@@ -193,52 +186,45 @@ function drawBackground(image, W, H) {
 }
 
 // --- Posture ---
+const fmtSecs = ms => Math.floor(ms / 1000) + 's';
+
 function processPosture(lm, W, H) {
-    const nose = lm[0], leftEar = lm[7], rightEar = lm[8], leftS = lm[11], rightS = lm[12];
-
-    // visibility threshold filters hallucinations
-    const shoulderVisible = leftS.visibility > CONFIG.VIS_THRESH && rightS.visibility > CONFIG.VIS_THRESH;
-    const headVisible = nose.visibility > CONFIG.VIS_THRESH && leftEar.visibility > CONFIG.VIS_THRESH && rightEar.visibility > CONFIG.VIS_THRESH;
-
-    if (shoulderVisible) {
-        const rawAngle = shoulderAngle(leftS, rightS, W, H);
-        if (calibrationCollecting()) calibrationData.shoulderAngle.push(rawAngle);
-
-        const corrected = rawAngle - baselineShoulderAngle;
-        smoothShoulderAngle = ema(smoothShoulderAngle, corrected, alphaFor(frameDt, CONFIG.SHOULDER_TAU_MS));
-        alertStates.shoulder = Math.abs(smoothShoulderAngle) > CONFIG.THRESHOLDS.shoulder;
-        updateMetric('m-shoulder', smoothShoulderAngle.toFixed(2) + "°", alertStates.shoulder, Math.abs(smoothShoulderAngle) / 8 * 100);
-    } else {
-        alertStates.shoulder = false;
-        updateMetric('m-shoulder', "BLOCKED", false, 0);
+    const r = monitor.step(lm, W, H, frameDt);
+    lastPosture = r;
+    if (calibrationCollecting()) {
+        if (r.raw.shoulderAngle !== null) calibrationData.shoulderAngle.push(r.raw.shoulderAngle);
+        if (r.raw.headRatio !== null) calibrationData.headRatio.push(r.raw.headRatio);
     }
 
-    let fwdExtra = 0;
-    if (headVisible && shoulderVisible) {
-        lastHeadRatio = headRatio(leftEar, rightEar, leftS, rightS);
-        if (calibrationCollecting()) calibrationData.headRatio.push(lastHeadRatio);
-        if (baselineHeadRatio > 0) {
-            smoothHeadRatio = ema(smoothHeadRatio, lastHeadRatio, alphaFor(frameDt, CONFIG.SMOOTH_TAU_MS));
-            const forwardRatio = smoothHeadRatio / baselineHeadRatio;
-            alertStates.forward = forwardRatio > CONFIG.THRESHOLDS.forward;
-            fwdExtra = Math.round((forwardRatio - 1) * 100);
-            updateMetric('m-forward', alertStates.forward ? "+" + fwdExtra + "%" : "NORMAL", alertStates.forward, Math.max(0, forwardRatio - 1) / 0.30 * 100);
-        } else updateMetric('m-forward', "NO CALIB", false, 0);
-    } else {
-        alertStates.forward = false;
-        updateMetric('m-forward', "BLOCKED", false, 0);
+    const sh = r.shoulder, fw = r.forward;
+    alertStates.shoulder = sh.state !== 'ok';
+    alertStates.forward = fw.state !== 'ok';
+    sustainedAlert = sh.state === 'alert' || fw.state === 'alert';
+
+    if (sh.visible) {
+        const label = sh.value.toFixed(1) + "°" + (alertStates.shoulder ? " · " + fmtSecs(sh.overMs) : "");
+        updateMetric('m-shoulder', label, alertStates.shoulder, Math.abs(sh.value) / 8 * 100);
+    } else updateMetric('m-shoulder', "BLOCKED", false, 0);
+
+    const fwdExtra = Math.round((fw.ratio - 1) * 100);
+    if (!fw.visible) updateMetric('m-forward', "BLOCKED", false, 0);
+    else if (!fw.calibrated) updateMetric('m-forward', "NO CALIB", false, 0);
+    else {
+        const label = alertStates.forward ? "+" + fwdExtra + "% · " + fmtSecs(fw.overMs) : "NORMAL";
+        updateMetric('m-forward', label, alertStates.forward, Math.max(0, fw.ratio - 1) / 0.30 * 100);
     }
 
-    drawHUDOverlays(W, H, leftS, rightS, nose, fwdExtra, shoulderVisible, headVisible);
+    if (sh.fired || fw.fired) onSustainedAlert(sh.fired ? 'shoulder' : 'forward');
+
+    if (lm) drawHUDOverlays(W, H, lm[11], lm[12], lm[0], fwdExtra, sh.visible, fw.visible && fw.calibrated, sh.value);
 }
 
-function clearPosture() {
-    alertStates.shoulder = alertStates.forward = false;
-    updateMetric('m-shoulder', "BLOCKED", false, 0);
-    updateMetric('m-forward', "BLOCKED", false, 0);
+// Posture has been bad for the whole hold time.
+function onSustainedAlert(metric) {
+    playAlertSound();
 }
 
-function drawHUDOverlays(W, H, leftS, rightS, nose, fwdExtra, shoulderVisible, headVisible) {
+function drawHUDOverlays(W, H, leftS, rightS, nose, fwdExtra, shoulderVisible, forwardShown, shoulderValue) {
     if (shoulderVisible) {
         canvasCtx.beginPath();
         canvasCtx.moveTo(leftS.x * W, leftS.y * H);
@@ -263,16 +249,13 @@ function drawHUDOverlays(W, H, leftS, rightS, nose, fwdExtra, shoulderVisible, h
         canvasCtx.restore();
     };
 
-    if (shoulderVisible) drawHUD("S:" + Math.abs(smoothShoulderAngle).toFixed(0) + "°", leftS.x * W + 20, leftS.y * H - 15, alertStates.shoulder);
-    if (headVisible && baselineHeadRatio > 0 && fwdExtra > 0) drawHUD("F:+" + fwdExtra + "%", nose.x * W, nose.y * H + 30, alertStates.forward);
+    if (shoulderVisible) drawHUD("S:" + Math.abs(shoulderValue).toFixed(0) + "°", leftS.x * W + 20, leftS.y * H - 15, alertStates.shoulder);
+    if (forwardShown && fwdExtra > 0) drawHUD("F:+" + fwdExtra + "%", nose.x * W, nose.y * H + 30, alertStates.forward);
 }
 
 // --- Calibration ---
 function applyBaseline(b) {
-    baselineHeadRatio = b.headRatio;
-    smoothHeadRatio = baselineHeadRatio;
-    baselineShoulderAngle = b.shoulderAngle;
-    smoothShoulderAngle = 0;
+    monitor.setBaseline(b);
 }
 
 // Storage can be unavailable (private window, blocked site data); the app
@@ -312,7 +295,6 @@ function handleCalibration(W, H) {
         canvasCtx.fillText(`Calibrating... Keep still (${timeLeft}s)`, 0, 0);
         canvasCtx.restore();
 
-        alertStates.shoulder = alertStates.forward = false;
     } else {
         isCalibrating = false;
         const baseline = {
@@ -442,9 +424,9 @@ function updateMetric(id, val, isAlert, pct) {
         }
     }
 
-    const hasAnyAlert = alertStates.shoulder || alertStates.forward;
-    if (document.body.classList.contains('alert-active') !== hasAnyAlert) {
-        document.body.classList.toggle('alert-active', hasAnyAlert);
+    // The pulsing vignette is for sustained alerts only, not every drift.
+    if (document.body.classList.contains('alert-active') !== sustainedAlert) {
+        document.body.classList.toggle('alert-active', sustainedAlert);
     }
 }
 
@@ -460,10 +442,8 @@ function onResults(results) {
     if (lm) {
         updateHeatmap(lm[0], lm[11], lm[12]);
         drawHeatmap(W, H);
-        processPosture(lm, W, H);
-    } else {
-        clearPosture();
     }
+    processPosture(lm, W, H);
     handleCalibration(W, H);
     canvasCtx.restore();
 }

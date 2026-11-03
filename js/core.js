@@ -50,6 +50,88 @@
                Math.hypot(leftS.x - rightS.x, leftS.y - rightS.y);
     }
 
+    // Hysteresis + hold time for one metric, where a larger value is worse.
+    // ok -> over when value > on; over/alert -> ok when value < off.
+    // over -> alert after holdMs continuously over; `fired` is true on that
+    // one step only, so callers can raise a single notification.
+    function createSustain({ on, off, holdMs }) {
+        let state = 'ok', overMs = 0;
+        return {
+            reset() { state = 'ok'; overMs = 0; },
+            step(value, dtMs) {
+                let fired = false;
+                if (state === 'ok') {
+                    if (value > on) { state = 'over'; overMs = 0; }
+                } else if (value < off) {
+                    state = 'ok'; overMs = 0;
+                }
+                if (state !== 'ok') {
+                    overMs += dtMs;
+                    if (state === 'over' && overMs >= holdMs) { state = 'alert'; fired = true; }
+                }
+                return { state, overMs, fired };
+            }
+        };
+    }
+
+    const DEFAULT_MONITOR = {
+        visThresh: 0.85,
+        smoothTauMs: 205,
+        shoulderTauMs: 316,
+        shoulder: { on: 4.5, off: 3.0 },    // degrees from baseline
+        forward: { on: 1.08, off: 1.05 },   // head ratio / baseline
+        holdMs: 60000                       // sustained this long -> alert
+    };
+
+    // Turns pose landmarks into the two posture metrics. Pure: no DOM, so
+    // the live page and recorded-landmark replays run the same code.
+    function createPostureMonitor(cfg = DEFAULT_MONITOR) {
+        let base = { headRatio: 0, shoulderAngle: 0 };
+        let smShoulder = 0, smHead = 0;
+        const sShoulder = createSustain({ ...cfg.shoulder, holdMs: cfg.holdMs });
+        const sForward = createSustain({ ...cfg.forward, holdMs: cfg.holdMs });
+        const vis = p => p && p.visibility > cfg.visThresh;
+
+        return {
+            setBaseline(b) {
+                base = { headRatio: b.headRatio, shoulderAngle: b.shoulderAngle };
+                smShoulder = 0; smHead = base.headRatio;
+                sShoulder.reset(); sForward.reset();
+            },
+            get baseline() { return { ...base }; },
+            // lm: 33 pose landmarks (or null); W, H: frame size in pixels.
+            step(lm, W, H, dtMs) {
+                const out = {
+                    raw: { shoulderAngle: null, headRatio: null },
+                    shoulder: { visible: false, value: 0, state: 'ok', overMs: 0, fired: false },
+                    forward: { visible: false, calibrated: base.headRatio > 0, ratio: 1, state: 'ok', overMs: 0, fired: false }
+                };
+                const nose = lm && lm[0], lEar = lm && lm[7], rEar = lm && lm[8], lS = lm && lm[11], rS = lm && lm[12];
+                const shouldersSeen = vis(lS) && vis(rS);
+                const headSeen = vis(nose) && vis(lEar) && vis(rEar);
+
+                if (shouldersSeen) {
+                    const raw = shoulderAngle(lS, rS, W, H);
+                    out.raw.shoulderAngle = raw;
+                    smShoulder = ema(smShoulder, raw - base.shoulderAngle, alphaFor(dtMs, cfg.shoulderTauMs));
+                    out.shoulder = { visible: true, value: smShoulder, ...sShoulder.step(Math.abs(smShoulder), dtMs) };
+                } else sShoulder.reset();
+
+                if (shouldersSeen && headSeen) {
+                    const raw = headRatio(lEar, rEar, lS, rS);
+                    out.raw.headRatio = raw;
+                    out.forward.visible = true;
+                    if (base.headRatio > 0) {
+                        smHead = ema(smHead, raw, alphaFor(dtMs, cfg.smoothTauMs));
+                        const ratio = smHead / base.headRatio;
+                        Object.assign(out.forward, { ratio }, sForward.step(ratio, dtMs));
+                    }
+                } else sForward.reset();
+                return out;
+            }
+        };
+    }
+
     const BASELINE_KEYS = ['headRatio', 'shoulderAngle'];
     const BASELINE_VERSION = 1;
 
@@ -76,7 +158,7 @@
     }
 
     const PostureCore = {
-        BASELINE_KEYS, ema, alphaFor, tauFromFrameAlpha, median, shoulderAngle,
+        BASELINE_KEYS, DEFAULT_MONITOR, createSustain, createPostureMonitor, ema, alphaFor, tauFromFrameAlpha, median, shoulderAngle,
         faceRotation, headRatio, serializeBaseline, parseBaseline
     };
 

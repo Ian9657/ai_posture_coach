@@ -92,3 +92,71 @@ test('parseBaseline rejects missing, malformed or foreign data', () => {
     assert.equal(C.parseBaseline(JSON.stringify(missing)), null);
     assert.notEqual(C.parseBaseline(JSON.stringify(ok)), null);
 });
+
+test('createSustain: hysteresis between on and off', () => {
+    const s = C.createSustain({ on: 1.08, off: 1.05, holdMs: 60000 });
+    assert.equal(s.step(1.07, 100).state, 'ok');
+    assert.equal(s.step(1.09, 100).state, 'over');
+    assert.equal(s.step(1.06, 100).state, 'over');   // between off and on: stays over
+    assert.equal(s.step(1.04, 100).state, 'ok');
+    assert.equal(s.step(1.06, 100).state, 'ok');     // between: stays ok
+});
+
+test('createSustain: alert only after holdMs over, fired once', () => {
+    const s = C.createSustain({ on: 1, off: 0.5, holdMs: 1000 });
+    let fired = 0, r;
+    for (let t = 0; t < 900; t += 100) { r = s.step(2, 100); fired += r.fired; }
+    assert.equal(r.state, 'over');
+    for (let t = 900; t < 5000; t += 100) { r = s.step(2, 100); fired += r.fired; }
+    assert.equal(r.state, 'alert');
+    assert.equal(fired, 1);
+    assert.equal(s.step(0.4, 100).state, 'ok');
+    // a dip that stays above `off` does not restart the hold
+    for (let t = 0; t < 600; t += 100) s.step(2, 100);
+    s.step(0.7, 100);
+    for (let t = 0; t < 400; t += 100) r = s.step(2, 100);
+    assert.equal(r.state, 'alert');
+});
+
+// Synthetic pose: ears/shoulders placed so headRatio = earSpan / 0.4.
+function pose({ earSpan = 0.1, tiltDeg = 0, vis = 1 } = {}) {
+    const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: vis }));
+    lm[0] = { x: 0.5, y: 0.42, z: 0, visibility: vis };
+    lm[7] = { x: 0.5 + earSpan / 2, y: 0.4, z: 0, visibility: vis };
+    lm[8] = { x: 0.5 - earSpan / 2, y: 0.4, z: 0, visibility: vis };
+    // shoulders 0.4 wide (normalised x) at 640x480, tilted by tiltDeg in pixels
+    const dx = 0.4 * 640, dy = Math.tan(tiltDeg * Math.PI / 180) * dx;
+    lm[11] = { x: 0.7, y: 0.7 + dy / 480 / 2, z: 0, visibility: vis };
+    lm[12] = { x: 0.3, y: 0.7 - dy / 480 / 2, z: 0, visibility: vis };
+    return lm;
+}
+const run = (mon, lm, ms, dt = 100) => { let r; for (let t = 0; t < ms; t += dt) r = mon.step(lm, 640, 480, dt); return r; };
+
+test('posture monitor: forward lean goes over at once and alerts after holdMs', () => {
+    const mon = C.createPostureMonitor({ ...C.DEFAULT_MONITOR, holdMs: 5000 });
+    mon.setBaseline({ headRatio: 0.25, shoulderAngle: 0 });
+    let r = run(mon, pose(), 2000);
+    assert.equal(r.forward.state, 'ok');
+    close(r.forward.ratio, 1, 1e-6);
+    r = run(mon, pose({ earSpan: 0.11 }), 2000);       // +10%
+    assert.equal(r.forward.state, 'over');
+    r = run(mon, pose({ earSpan: 0.11 }), 4000);
+    assert.equal(r.forward.state, 'alert');
+    r = run(mon, pose({ earSpan: 0.104 }), 3000);      // +4%: below off
+    assert.equal(r.forward.state, 'ok');
+});
+
+test('posture monitor: shoulder tilt, invisibility and no calibration', () => {
+    const mon = C.createPostureMonitor({ ...C.DEFAULT_MONITOR, holdMs: 1000 });
+    let r = run(mon, pose({ tiltDeg: 6 }), 3000);
+    assert.equal(r.shoulder.state, 'alert');
+    assert.ok(Math.abs(Math.abs(r.shoulder.value) - 6) < 0.1);
+    assert.equal(r.forward.calibrated, false);
+    assert.equal(r.forward.state, 'ok');
+    r = mon.step(pose({ tiltDeg: 6, vis: 0.5 }), 640, 480, 100);   // occluded
+    assert.equal(r.shoulder.visible, false);
+    assert.equal(r.shoulder.state, 'ok');
+    r = mon.step(null, 640, 480, 100);                             // nobody in frame
+    assert.equal(r.forward.visible, false);
+    assert.equal(r.raw.headRatio, null);
+});

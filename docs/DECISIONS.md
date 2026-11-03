@@ -35,15 +35,21 @@ Everything is driven by elapsed time, not frame counts (#14), so the behaviour i
 
 ## Metrics
 
-| Metric | Raw value | Smoothing | Alert when | Gauge full at | Status |
-|---|---|---|---|---|---|
-| Shoulders | angle of the shoulder line in pixels, minus baseline | EMA τ 316 ms | \|angle\| > 4.5° | 8° | inherited |
-| Forward head | (ear span / shoulder span) ÷ baseline | EMA τ 205 ms | ratio > 1.08 | 1.30 | decided |
+| Metric | Raw value | Smoothing | Over when | Back to ok when | Gauge full at | Status |
+|---|---|---|---|---|---|---|
+| Shoulders | angle of the shoulder line in pixels, minus baseline | EMA τ 316 ms | \|angle\| > 4.5° | < 3.0° | 8° | inherited / off: decided |
+| Forward head | (ear span / shoulder span) ÷ baseline | EMA τ 205 ms | ratio > 1.08 | < 1.05 | 1.30 | decided |
 
 Notes:
 
 - **Shoulder angle** is computed in pixels, not normalised units, so a non-square frame does not distort it. Shoulders get a slower EMA because shoulder landmarks jitter more than face landmarks.
 - **Forward head** works because the head is closer to the camera than the shoulders: leaning the head forward enlarges the ear span more than the shoulder span, while moving the whole body closer scales both and leaves the ratio unchanged (covered by `test/core.test.js`). Known blind spots, not yet measured: turning the head shrinks the ear span and can hide a forward lean; looking down at a phone changes the ear span very little.
+
+## Alerts
+
+Each metric runs a small state machine (`createSustain` in `js/core.js`): **ok → over** when the smoothed value crosses the "over" threshold, **back to ok** only below the lower threshold (hysteresis, so a value hovering at the line does not flicker), and **over → alert** after 60 s continuously over (`holdMs`). While over, the metric turns orange and shows how long it has been over; the vignette and the beep come only with **alert**, once per episode. Leaning in for a few seconds to read something is not bad posture; holding it for a minute is.
+
+The off thresholds (3.0°, 1.05) and the 60 s hold are first choices, not measured. Losing sight of the head or shoulders resets that metric to ok.
 
 ## Scope (#16)
 
@@ -65,3 +71,4 @@ Everything removed is in tag `v2.6.0`.
 - 2026-11-03: forward-head threshold 1.15 → 1.08. Owner tested: 1.15 was too lenient; leaning to the point that already felt like bad posture read +9%. 1.15 needs roughly 8 cm of forward head at 60 cm from the camera.
 - 2026-11-03: #16. Removed mouth, face rotation, score/chart and decorative text. Calibration saves only head ratio and shoulder angle; v1 saves from v2.6 still load (extra keys ignored).
 - 2026-11-03: Holistic → PoseLandmarker lite (tasks-vision 1.1.1). camera_utils replaced by getUserMedia + own frame loop. See the comparison table.
+- 2026-11-03: posture evaluation moved to `core.createPostureMonitor`; hysteresis (off 3.0° / 1.05) and a 60 s hold before the alert. Beep now fires once per sustained alert instead of on a low score.

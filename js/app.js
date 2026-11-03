@@ -710,7 +710,9 @@ if (typeof Holistic === 'undefined') {
     alert("Script failed to load. Check network.");
 }
 
-const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}` });
+// Must match the holistic.js version in index.html.
+const HOLISTIC_VERSION = '0.5.1675471629';
+const holistic = new Holistic({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@${HOLISTIC_VERSION}/${file}` });
 holistic.setOptions({
     modelComplexity: 0,
     minDetectionConfidence: 0.5,

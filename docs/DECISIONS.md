@@ -26,7 +26,7 @@ Everything is driven by elapsed time, not frame counts (#14), so the behaviour i
 |---|---|---|---|---|---|
 | Shoulders | angle of the shoulder line in pixels, minus baseline | EMA τ 316 ms | \|angle\| > 4.5° | 8° | inherited |
 | Face rotation | (dL − dR)/(dL + dR), horizontal nose-to-ear distances, minus baseline | EMA τ 205 ms | \|value\| > 0.20 | 0.40 | inherited |
-| Forward head | (ear span / shoulder span) ÷ baseline | EMA τ 205 ms | ratio > 1.15 | 1.30 | inherited |
+| Forward head | (ear span / shoulder span) ÷ baseline | EMA τ 205 ms | ratio > 1.08 | 1.30 | decided |
 | Mouth | lip gap / face height ÷ baseline | EMA τ 205 ms | open for > 5 s | — | inherited |
 
 Notes:
@@ -51,3 +51,4 @@ Weights (inherited): shoulders 0.25, rotation 0.25, forward head 0.30, mouth 0.2
 - 2026-11-03: #13 fixed. In v2.6.0 every chart-window click reset the counters without `forward`, so the score read NaN until the next calibration.
 - 2026-11-03: #14 fixed. Frame counts became milliseconds and per-frame alphas became time constants. Measured in headless Chrome at a low frame rate: v2.6.0's "3 s" calibration took 12.3 s, now 3.2 s.
 - 2026-11-03: #5. Calibration persists across visits.
+- 2026-11-03: forward-head threshold 1.15 → 1.08. Owner tested: 1.15 was too lenient; leaning to the point that already felt like bad posture read +9%. 1.15 needs roughly 8 cm of forward head at 60 cm from the camera.

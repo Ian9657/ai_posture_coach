@@ -7,7 +7,7 @@ const CONFIG = {
     THRESHOLDS: {
         shoulder: 4.5,
         rotation: 0.20,
-        forward: 1.15,
+        forward: 1.08,  // owner: +9% already feels like bad posture (2026-11-03)
         mouth: 1.12
     },
     RAMP_SEC: 30,

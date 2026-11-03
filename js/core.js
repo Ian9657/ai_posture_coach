@@ -105,6 +105,31 @@
         };
     }
 
+    const BASELINE_KEYS = ['lipDist', 'headRatio', 'shoulderAngle', 'faceRotation'];
+    const BASELINE_VERSION = 1;
+
+    // Calibration baseline <-> JSON string for localStorage.
+    function serializeBaseline(b, savedAt) {
+        const out = { v: BASELINE_VERSION, savedAt };
+        for (const k of BASELINE_KEYS) out[k] = b[k];
+        return JSON.stringify(out);
+    }
+
+    // Returns { baseline, savedAt } or null for anything missing, malformed
+    // or from another format version.
+    function parseBaseline(text) {
+        let d;
+        try { d = JSON.parse(text); } catch (e) { return null; }
+        if (!d || d.v !== BASELINE_VERSION || !Number.isFinite(d.savedAt)) return null;
+        const baseline = {};
+        for (const k of BASELINE_KEYS) {
+            if (!Number.isFinite(d[k])) return null;
+            baseline[k] = d[k];
+        }
+        if (baseline.lipDist < 0 || baseline.headRatio < 0) return null;
+        return { baseline, savedAt: d.savedAt };
+    }
+
     // Zeroed alert counters, one per metric.
     function freshCounters() {
         const c = {};
@@ -147,7 +172,7 @@
     }
 
     const PostureCore = {
-        METRICS, MOUTH_TIMING, freshCounters, ema, alphaFor, tauFromFrameAlpha, createMouthTracker, median, shoulderAngle, faceRotation, headRatio,
+        METRICS, MOUTH_TIMING, BASELINE_KEYS, serializeBaseline, parseBaseline, freshCounters, ema, alphaFor, tauFromFrameAlpha, createMouthTracker, median, shoulderAngle, faceRotation, headRatio,
         lipDistance, mouthHysteresis, countTransitions, scoreTick, analyzeSegment
     };
 

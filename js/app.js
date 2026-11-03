@@ -17,7 +17,10 @@ const CONFIG = {
 };
 
 const { ema, median, shoulderAngle, faceRotation, headRatio, lipDistance,
-        freshCounters, scoreTick, analyzeSegment, alphaFor, createMouthTracker } = PostureCore;
+        freshCounters, scoreTick, analyzeSegment, alphaFor, createMouthTracker,
+        serializeBaseline, parseBaseline } = PostureCore;
+
+const CALIBRATION_STORE_KEY = 'posture-core.calibration';
 
 const videoElement = document.getElementById('input_video');
 const canvasElement = document.getElementById('output_canvas');
@@ -333,6 +336,37 @@ function processMouth(results, W, H, poseMouthUnoccluded) {
     });
 }
 
+function applyBaseline(b) {
+    baselineLipDist = b.lipDist;
+    smoothLipDist = baselineLipDist;
+    baselineHeadRatio = b.headRatio;
+    smoothHeadRatio = baselineHeadRatio;
+    baselineShoulderAngle = b.shoulderAngle;
+    smoothShoulderAngle = 0;
+    baselineFaceRotation = b.faceRotation;
+    smoothFaceRotation = 0;
+
+    mouthTracker.reset();
+    consecutiveAlert = freshCounters();
+    scoreHistory.length = 0;
+    lastSampleTime = Date.now();
+}
+
+// Storage can be unavailable (private window, blocked site data); the app
+// then simply asks for calibration each time, as before.
+function saveBaseline(b) {
+    try { localStorage.setItem(CALIBRATION_STORE_KEY, serializeBaseline(b, Date.now())); } catch (e) {}
+}
+
+function restoreBaseline() {
+    let text = null;
+    try { text = localStorage.getItem(CALIBRATION_STORE_KEY); } catch (e) {}
+    const saved = text && parseBaseline(text);
+    if (!saved) return null;
+    applyBaseline(saved.baseline);
+    return saved.savedAt;
+}
+
 function calibrationCollecting() {
     return isCalibrating && frameNow - calibrationStartedAt < CONFIG.CALIBRATION_MS;
 }
@@ -361,19 +395,17 @@ function handleCalibration(results, W, H) {
         alertStates.shoulder = alertStates.rotation = alertStates.forward = alertStates.mouth = false;
     } else {
         isCalibrating = false;
-        baselineLipDist = median(calibrationData.lipDist);
-        smoothLipDist = baselineLipDist;
-        baselineHeadRatio = median(calibrationData.headRatio);
-        smoothHeadRatio = baselineHeadRatio;
-        baselineShoulderAngle = median(calibrationData.shoulderAngle);
-        smoothShoulderAngle = 0;
-        baselineFaceRotation = median(calibrationData.faceRotation);
-        smoothFaceRotation = 0;
-        
-        mouthTracker.reset();
-        consecutiveAlert = freshCounters();
-        scoreHistory.length = 0;
-        lastSampleTime = Date.now();
+        const baseline = {
+            lipDist: median(calibrationData.lipDist),
+            headRatio: median(calibrationData.headRatio),
+            shoulderAngle: median(calibrationData.shoulderAngle),
+            faceRotation: median(calibrationData.faceRotation)
+        };
+        applyBaseline(baseline);
+        // Only keep a baseline that saw face and shoulders together;
+        // otherwise forward-head has nothing to compare against.
+        if (calibrationData.headRatio.length > 0) saveBaseline(baseline);
+        else showToast('Face or shoulders not visible during calibration. Not saved.', 5000);
         
         const btn = document.getElementById('calibrate-btn');
         const sidebar = document.getElementById('sidebar');
@@ -740,6 +772,13 @@ async function startSystem() {
         // 4. 全部准备好后再关闭 Loading
         overlay.classList.add('hidden');
         showToast('AI Systems Online');
+        const savedAt = restoreBaseline();
+        if (savedAt) {
+            const when = new Date(savedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+            showToast(`Calibration from ${when} loaded. Press C if the camera moved.`, 5000);
+        } else {
+            showToast('Sit upright and press C to calibrate.', 5000);
+        }
         
     } catch (err) {
         console.error("Initialization failed:", err);

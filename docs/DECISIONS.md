@@ -14,6 +14,8 @@ A landmark only counts when its `visibility` exceeds **0.85** (`CONFIG.VIS_THRES
 
 All metrics are relative to a **calibration baseline**: the median of each raw value over 3 s (`CALIBRATION_MS`) while the user sits upright. Median rather than mean, so a single bad frame does not shift the baseline.
 
+The baseline is saved in `localStorage` (`posture-core.calibration`, format version 1) and restored on the next visit, so the app works without recalibrating (#5). It is saved only when face and shoulders were visible together during calibration; a missing, malformed or other-version entry is ignored. Press C again whenever the camera or chair moves.
+
 ## Timing
 
 Everything is driven by elapsed time, not frame counts (#14), so the behaviour is the same at 30 fps and at the lower rates planned for background use. Smoothing is an EMA with weight `1 − exp(−dt/τ)`; the time constants τ were derived from v2.6.0's per-frame alphas (0.15 → 205 ms, 0.10 → 316 ms at 30 fps), so at 30 fps nothing changes. A single frame step is capped at 1 s so a stall or hidden tab cannot jump the smoothed values.
@@ -48,3 +50,4 @@ Weights (inherited): shoulders 0.25, rotation 0.25, forward head 0.30, mouth 0.2
 - 2026-11-03: file created; all values recorded as inherited from v2.6.0.
 - 2026-11-03: #13 fixed. In v2.6.0 every chart-window click reset the counters without `forward`, so the score read NaN until the next calibration.
 - 2026-11-03: #14 fixed. Frame counts became milliseconds and per-frame alphas became time constants. Measured in headless Chrome at a low frame rate: v2.6.0's "3 s" calibration took 12.3 s, now 3.2 s.
+- 2026-11-03: #5. Calibration persists across visits.

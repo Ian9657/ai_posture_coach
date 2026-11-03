@@ -180,3 +180,22 @@ test('reset clears the tracker', () => {
     assert.equal(r.openMs, 0);
     assert.equal(r.state, 'CLOSED');
 });
+
+test('baseline round-trips through serialize/parse (#5)', () => {
+    const b = { lipDist: 0.012, headRatio: 0.41, shoulderAngle: -1.7, faceRotation: 0.03 };
+    const got = C.parseBaseline(C.serializeBaseline(b, 1762200000000));
+    assert.deepEqual(got, { baseline: b, savedAt: 1762200000000 });
+});
+
+test('parseBaseline rejects missing, malformed or foreign data', () => {
+    const ok = { v: 1, savedAt: 1, lipDist: 0.01, headRatio: 0.4, shoulderAngle: 0, faceRotation: 0 };
+    assert.equal(C.parseBaseline(null), null);
+    assert.equal(C.parseBaseline('not json'), null);
+    assert.equal(C.parseBaseline('null'), null);
+    assert.equal(C.parseBaseline(JSON.stringify({ ...ok, v: 2 })), null);
+    assert.equal(C.parseBaseline(JSON.stringify({ ...ok, headRatio: 'x' })), null);
+    assert.equal(C.parseBaseline(JSON.stringify({ ...ok, lipDist: -1 })), null);
+    const { faceRotation, ...missing } = ok;
+    assert.equal(C.parseBaseline(JSON.stringify(missing)), null);
+    assert.notEqual(C.parseBaseline(JSON.stringify(ok)), null);
+});

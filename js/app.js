@@ -132,6 +132,20 @@ let lastSampleTime = 0;
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let lastBeepTime = 0;
+
+// Browsers keep an AudioContext suspended until the page gets a user
+// gesture, and resume() outside a gesture is ignored. Resume on the first
+// click/tap/key (calibrating with C or the button counts) so later alert
+// beeps can actually play.
+function unlockAudio() {
+    if (audioCtx.state !== 'suspended') return;
+    audioCtx.resume().then(() => {
+        if (audioCtx.state === 'running') {
+            ['pointerdown', 'keydown'].forEach(t => document.removeEventListener(t, unlockAudio, true));
+        }
+    }).catch(() => {});
+}
+['pointerdown', 'keydown'].forEach(t => document.addEventListener(t, unlockAudio, true));
 function playAlertSound() {
     if (audioCtx.state === 'suspended') audioCtx.resume();
     if (Date.now() - lastBeepTime < 5000) return;
